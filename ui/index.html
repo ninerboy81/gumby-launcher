@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gumby's Launcher</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="top">
+  <div class="brand title"><span class="ring"></span><span id="appname">Gumby's Launcher</span></div>
+  <div class="status" id="status"><span class="dot"></span>No games running</div>
+  <button class="iconbtn" id="gear" title="Settings" aria-label="Settings"></button>
+</div>
+<div id="update"></div>
+<main>
+  <div id="zones"></div>
+  <div class="head"><h2 class="title">Groups</h2><p>Open several accounts with one click</p><button class="btn add" id="newgroup"></button></div>
+  <div id="groups"></div>
+  <div class="head" style="margin-top:18px"><h2 class="title">Accounts</h2><p>Press play to open just that one</p><button class="btn add" id="addacct"></button></div>
+  <div id="accounts"></div>
+</main>
+<div id="modal"></div>
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

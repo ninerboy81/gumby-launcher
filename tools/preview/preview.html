@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Launcher preview</title><link rel="stylesheet" href="../../ui/app.css"></head>
+<body>
+<!-- the real page body, with a made-up core behind it (preview.js); ?s=home|launching|add|group|settings|multi|empty -->
+<div class="top">
+  <div class="brand title"><span class="ring"></span><span id="appname">Gumby's Launcher</span></div>
+  <div class="status" id="status"></div>
+  <button class="iconbtn" id="gear"></button>
+</div>
+<div id="update"></div>
+<main>
+  <div id="zones"></div>
+  <div class="head"><h2 class="title">Groups</h2><p>Open several accounts with one click</p><button class="btn add" id="newgroup"></button></div>
+  <div id="groups"></div>
+  <div class="head" style="margin-top:18px"><h2 class="title">Accounts</h2><p>Press play to open just that one</p><button class="btn add" id="addacct"></button></div>
+  <div id="accounts"></div>
+</main>
+<div id="modal"></div>
+<div class="toast" id="toast"></div>
+<script src="preview.js"></script>
+<script src="../../ui/app.js"></script>
+<script>
+  setTimeout(() => {
+    const s = new URLSearchParams(location.search).get('s');
+    if (s === 'add') accountDialog(null);
+    if (s === 'group') { groupDialog(null); picked = ['a1', 'a2', 'a3']; drawPicks(); document.getElementById('f-gname').value = 'Farm team'; }
+    if (s === 'settings') settingsDialog();
+    if (s === 'multi') document.querySelector('[data-act=launch]').click();
+  }, 150);
+</script>
+</body>
+</html>
