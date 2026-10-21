@@ -9,6 +9,7 @@
   const groups = s === 'empty' ? [] : [
     { id: 'g1', name: 'Farm team', accounts: ['a1', 'a2', 'a3'] },
     { id: 'g2', name: 'Solo run', accounts: ['a1'] },
+    { id: 'g3', name: 'Cow runs', accounts: ['a2', 'a3'] },
   ];
   const launching = s === 'launching';
   const state = {

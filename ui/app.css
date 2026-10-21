@@ -12,6 +12,7 @@
   --blue-glow: #b9a8ff;
   --copper: #e38a52;
   --steel: #4d9ccc;
+  --mint: 63,214,166;    /* the update bar's green, used sparingly */
   --ok: #3fd6a6;
   --warn: #f0b45a;
   --region: #e38a52;
@@ -25,6 +26,7 @@ body {
   background:
     radial-gradient(900px 520px at 8% -10%, rgba(124,92,255,.16), transparent 60%),
     radial-gradient(700px 480px at 105% 110%, rgba(227,138,82,.10), transparent 60%),
+    radial-gradient(620px 420px at 100% -12%, rgba(var(--mint),.07), transparent 62%),
     var(--ink);
   background-attachment: fixed;
 }
@@ -45,10 +47,13 @@ svg { display: block; }
 .top { display: flex; align-items: center; gap: 12px; padding: 18px 26px 16px; }
 .brand { display: flex; align-items: center; gap: 12px; font: 600 21px/1 var(--display); letter-spacing: -.01em; }
 .brand .ring {
-  width: 30px; height: 30px; border-radius: 9px;
+  width: 38px; height: 38px; border-radius: 11px; overflow: hidden; flex: none;
   background: radial-gradient(circle at 50% 120%, #b9a8ff 0, #7c5cff 35%, #2a1d63 70%), #1b1433;
   box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 0 22px rgba(124,92,255,.55);
 }
+/* the owner's own logo (ui/logo.png, kept out of the public repo); without it the violet tile above stays */
+.brand .ring img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.brand .ring:has(img) { width: 64px; height: 64px; border-radius: 16px; background: #1f7a5c; box-shadow: 0 0 0 1px rgba(255,255,255,.14), 0 0 20px rgba(63,214,166,.35), 0 6px 16px rgba(0,0,0,.5); }
 .top .status { margin-left: auto; color: var(--ash); font-size: 13px; display: flex; align-items: center; gap: 8px;
   padding: 6px 12px; border-radius: 999px; background: var(--slab); border: 1px solid var(--seam); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: #4b4860; }
@@ -58,7 +63,8 @@ svg { display: block; }
 
 main { padding: 8px 26px 28px; }
 .head { display: flex; align-items: baseline; gap: 12px; margin: 14px 0 12px; }
-.head h2 { font: 600 18px/1 var(--display); letter-spacing: -.01em; }
+.head h2 { font: 600 18px/1 var(--display); letter-spacing: -.01em; display: flex; align-items: center; gap: 9px; }
+.head h2::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--mint)); box-shadow: 0 0 10px rgba(var(--mint),.8); }
 .head p { color: var(--ash); font-size: 13px; }
 .head .add { margin-left: auto; }
 
@@ -76,7 +82,7 @@ main { padding: 8px 26px 28px; }
 .group { --glow: 124,92,255; display: grid; grid-template-columns: 1fr auto auto; gap: 22px; align-items: center;
   border-radius: 20px; padding: 18px 20px; margin-bottom: 12px; overflow: hidden; }
 .group:nth-child(3n+2) { --glow: 227,138,82; }
-.group:nth-child(3n) { --glow: 77,156,204; }
+.group:nth-child(3n) { --glow: var(--mint); }
 .group::before {   /* the coloured light */
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
   background: radial-gradient(520px 220px at 88% 120%, rgba(var(--glow),.30), transparent 70%),
@@ -92,6 +98,7 @@ main { padding: 8px 26px 28px; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
 .chip { display: inline-flex; align-items: center; gap: 7px; background: rgba(0,0,0,.28); border: 1px solid var(--seam);
   border-radius: 999px; padding: 3px 11px 3px 4px; font-size: 12.5px; box-shadow: inset 0 1px 0 rgba(255,255,255,.05); }
+.chip { border-color: rgba(var(--mint),.16); }
 .chip b { width: 19px; height: 19px; border-radius: 50%; background: rgba(var(--glow, 124,92,255),.28); color: #fff;
   display: grid; place-items: center; font: 700 11px var(--display); }
 .group .acts { display: flex; gap: 8px; align-items: center; }
@@ -128,7 +135,7 @@ main { padding: 8px 26px 28px; }
   background: linear-gradient(170deg, rgba(34,30,52,.96), rgba(16,15,24,.97)); border-radius: 22px; padding: 26px 28px 22px;
   box-shadow: inset 0 1px 0 var(--rim), 0 30px 80px rgba(0,0,0,.7), 0 0 0 1px rgba(124,92,255,.12); }
 .dialog::before { content: ""; position: absolute; left: 20%; right: 20%; top: -1px; height: 90px; pointer-events: none; z-index: -1;
-  background: radial-gradient(50% 100% at 50% 0, rgba(124,92,255,.35), transparent 75%); }
+  background: radial-gradient(50% 100% at 42% 0, rgba(124,92,255,.35), transparent 75%), radial-gradient(30% 80% at 66% 0, rgba(var(--mint),.18), transparent 75%); }
 .dialog h3 { font: 600 21px/1.15 var(--display); letter-spacing: -.01em; margin-bottom: 6px; }
 .dialog .lead { color: var(--ash); font-size: 13.5px; margin-bottom: 16px; }
 label.f { display: block; font-size: 12.5px; color: var(--ash); margin: 13px 0 6px; }
@@ -178,6 +185,7 @@ label.f { display: block; font-size: 12.5px; color: var(--ash); margin: 13px 0 6
 .btn:hover, .iconbtn:hover { border-color: var(--rim); background: var(--slab-hi); }
 .btn.primary:hover { background: linear-gradient(180deg, #a38bff, #7655ff); }
 .btn.ghost:hover { background: var(--slab); }
+.acct:hover { border-color: rgba(var(--mint),.28); box-shadow: inset 0 1px 0 var(--rim), 0 18px 40px -18px rgba(0,0,0,.8), 0 0 22px -8px rgba(var(--mint),.35); }
 .play:hover { box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 8px 24px -4px rgba(124,92,255,.95); }
 .btn:disabled, .play.off { opacity: .4; cursor: default; }
 .btn:focus-visible, .iconbtn:focus-visible, .play:focus-visible, .pick:focus-visible, .sw:focus-visible { outline: 2px solid var(--blue-glow); outline-offset: 2px; }
