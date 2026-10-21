@@ -1,6 +1,6 @@
 [package]
 name = "launcher-core"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "D2R launcher core: accounts, groups, opening games one after another, screen quarters"
 publish = false
