@@ -61,7 +61,7 @@ svg { display: block; }
 .iconbtn { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--seam); background: var(--slab);
   color: var(--ash); display: grid; place-items: center; box-shadow: inset 0 1px 0 rgba(255,255,255,.06); }
 
-main { padding: 8px 26px 28px; }
+main { padding: 8px 26px 40px; }
 .head { display: flex; align-items: baseline; gap: 12px; margin: 14px 0 12px; }
 .head h2 { font: 600 18px/1 var(--display); letter-spacing: -.01em; display: flex; align-items: center; gap: 9px; }
 .head h2::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: rgb(var(--mint)); box-shadow: 0 0 10px rgba(var(--mint),.8); }
@@ -257,3 +257,6 @@ html:has(body.alertmode), body.alertmode { background: transparent; min-height: 
 .zalert .s { color: var(--ash); font-size: 13px; }
 .zalert .x { position: absolute; right: 14px; top: 10px; color: var(--ash); }
 .tz .z { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* the version, bottom left */
+.ver { position: fixed; left: 14px; bottom: 10px; color: #5e5a72; font: 12px var(--display); letter-spacing: .03em; pointer-events: none; user-select: none; }
+.alertmode .ver { display: none; }

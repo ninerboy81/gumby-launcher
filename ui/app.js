@@ -115,6 +115,7 @@ function drawStatus() {
   else if (L.busy) text = `Opening ${esc(L.steps[0]?.name)}`;
   else text = S.running ? `${S.running} game${S.running === 1 ? '' : 's'} running` : 'No games running';
   $('status').innerHTML = `<span class="dot ${on || L.busy ? 'on' : ''}"></span>${text}`;
+  $('ver').textContent = `v${S.version}`;
   $('newgroup').disabled = !S.accounts.length;
   $('addacct').disabled = S.accounts.length >= S.max_accounts;
   $('addacct').style.visibility = S.accounts.length ? '' : 'hidden';   // the empty list has its own big button
