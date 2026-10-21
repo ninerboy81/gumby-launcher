@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "gumby-launcher"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "launcher-core",
  "serde_json",
@@ -1658,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "launcher-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
