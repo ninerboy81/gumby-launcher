@@ -41,6 +41,7 @@ impl Games for WinGames {
     fn token_taken(&mut self) -> bool {
         match &self.token_written { None => true, Some(w) => win::osi_token_value().map_or(true, |now| &now != w) }
     }
+    fn close(&mut self, pid: u32) { win::close_game(pid) }
     fn start(&mut self, st: launch::Start) -> Result<(), String> {
         let folder = self.folder.clone().ok_or("Could not find Diablo II: Resurrected. Set the game folder in Settings.")?;
         self.token_written = match &st.token { Some((token, region)) => Some(win::set_osi_token(token, region)?), None => None };
@@ -207,6 +208,16 @@ impl Engine {
                 self.begin(now, p, games, Some(g.name), Some(g.id), g.accounts)
             }
             "stop" => { self.launcher.stop(); Ok(Value::Bool(true)) }
+            "close_group" => {
+                let g = self.store.group(&s(p, "id")).ok_or("That group is not saved")?.clone();
+                let running = self.running(games);
+                let pids: Vec<u32> = g.accounts.iter().filter_map(|a| self.by_account.get(a).copied()).filter(|p| running.contains(p)).collect();
+                if pids.is_empty() { return Err("None of this group's games are open".into()); }
+                if self.launcher.busy() && self.launcher.view()["group"] == g.id.as_str() { self.launcher.stop(); }
+                for &pid in &pids { games.close(pid); }
+                report::log(format!("Close all: {} game(s)", pids.len()));
+                Ok(json!(pids.len()))
+            }
             "report_send" => { self.send_now = Some(s(p, "id")); Ok(Value::Bool(true)) }
             "report_dismiss" => { self.reports.done(&s(p, "id")); Ok(Value::Bool(true)) }
             "report_new" => self.reports.write("manual", "Sent from Settings", VERSION).map(Value::from).ok_or("Could not save the report".to_string()),
@@ -286,6 +297,27 @@ mod tests {
         assert_eq!(v["running"], 3);
         assert_eq!(v["open"].as_array().unwrap().len(), 3);
         assert!(!v.to_string().contains("\"pw\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn close_all_closes_only_that_groups_games() {
+        let dir = std::env::temp_dir().join(format!("d2r-launcher-closeall-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(&dir);
+        let mut g = FakeGames { window_after: 1, ..Default::default() };
+        let mut screen = Shots::default();
+        let mut t = Instant::now();
+        let ids: Vec<String> = ["a", "b", "c"].iter().map(|n| e.call(t, "account_save", &json!({"name": n, "email": format!("{}@example.com", n), "password": "pw", "region": "Americas"}), &mut g).unwrap().as_str().unwrap().to_string()).collect();
+        let g1 = e.call(t, "group_save", &json!({"name": "Two", "accounts": [ids[0], ids[1]]}), &mut g).unwrap().as_str().unwrap().to_string();
+        assert!(e.call(t, "close_group", &json!({"id": g1}), &mut g).is_err());   // nothing open yet
+        e.call(t, "launch_group", &json!({"id": g1, "multi": true}), &mut g).unwrap();
+        for _ in 0..60 { e.tick(t, &mut g, &mut screen); g.advance(); t += std::time::Duration::from_millis(500); }
+        e.call(t, "play", &json!({"id": ids[2]}), &mut g).unwrap();
+        for _ in 0..30 { e.tick(t, &mut g, &mut screen); g.advance(); t += std::time::Duration::from_millis(500); }
+        assert_eq!(g.procs.len(), 3);
+        assert_eq!(e.call(t, "close_group", &json!({"id": g1}), &mut g).unwrap(), 2);
+        assert_eq!(g.procs.len(), 1);   // the third account's game stays
         let _ = std::fs::remove_dir_all(&dir);
     }
 

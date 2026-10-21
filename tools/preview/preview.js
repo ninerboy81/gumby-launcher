@@ -14,8 +14,8 @@
   const launching = s === 'launching';
   const state = {
     app: "Gumby's Launcher", accounts, groups, allow_multi: false, max_accounts: 8, max_group: 4, regions: ['Americas', 'Europe', 'Asia'],
-    running: launching ? 2 : 0, game_folder: String.raw`C:\Program Files (x86)\Diablo II Resurrected`,
-    open: launching ? [{ account: 'a1', quarter: 0 }] : [],
+    running: launching ? 2 : s === 'open' ? 3 : 0, game_folder: String.raw`C:\Program Files (x86)\Diablo II Resurrected`,
+    open: launching ? [{ account: 'a1', quarter: 0 }] : s === 'open' ? [{ account: 'a1', quarter: 0 }, { account: 'a2', quarter: 1 }, { account: 'a3', quarter: 2 }] : [],
     launch: launching ? { busy: true, label: 'Farm team', group: 'g1', error: null, steps: [
       { account: 'a1', name: 'Main Barb', state: 'done', note: 'Open' },
       { account: 'a2', name: 'Mule Sorc', state: 'settling', note: 'Window open, signing in…' },

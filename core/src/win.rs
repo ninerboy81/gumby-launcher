@@ -42,6 +42,7 @@ extern "system" {
     fn GetLogicalDrives() -> u32;
     fn GetLocalTime(st: *mut SYSTEMTIME);
     fn GetDriveTypeW(root: *const u16) -> u32;
+    fn TerminateProcess(h: H, code: u32) -> i32;
 }
 #[link(name = "user32")]
 extern "system" {
@@ -55,6 +56,7 @@ extern "system" {
     fn MonitorFromWindow(hwnd: H, flags: u32) -> H;
     fn GetMonitorInfoW(m: H, info: *mut MONITORINFO) -> i32;
     fn GetWindowRect(hwnd: H, r: *mut RECT) -> i32;
+    fn PostMessageW(hwnd: H, msg: u32, w: usize, l: isize) -> i32;
 }
 #[link(name = "crypt32")]
 extern "system" {
@@ -134,6 +136,18 @@ pub fn window_rect(hwnd: isize) -> Option<Rect> {
     let mut r = RECT::default();
     if unsafe { GetWindowRect(hwnd as H, &mut r) } == 0 { return None; }
     Some(Rect { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top })
+}
+
+/// Closes a game the way its window's X button does (the game saves and exits); one still running 15 seconds later is
+/// ended. Only a process that is still D2R.exe is touched.
+pub fn close_game(pid: u32) {
+    for (_, w) in main_windows(&[pid]) { unsafe { PostMessageW(w as H, 0x0010, 0, 0); } }   // WM_CLOSE
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(15));
+        if pids_named("D2R.exe").contains(&pid) {
+            unsafe { let h = OpenProcess(0x0001, 0, pid); if !h.is_null() { TerminateProcess(h, 0); CloseHandle(h); } }   // PROCESS_TERMINATE
+        }
+    });
 }
 
 /// Moves and sizes a window (restored first if minimized). False when Windows refused.

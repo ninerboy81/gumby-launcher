@@ -30,6 +30,8 @@ pub trait Games {
     fn start(&mut self, start: Start) -> Result<(), String>;
     /// True once the game started last has taken the sign-in token it was given (or none was given).
     fn token_taken(&mut self) -> bool;
+    /// Closes a running game (like its window's X button).
+    fn close(&mut self, pid: u32);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -216,6 +218,7 @@ pub mod tests {
             let had = p.2 as usize; p.2 = false; Ok(had)
         }
         fn token_taken(&mut self) -> bool { self.token_left.map_or(true, |t| t == 0) }
+        fn close(&mut self, pid: u32) { self.procs.retain(|p| p.0 != pid); }
         fn start(&mut self, st: Start) -> Result<(), String> {
             let args = st.args;
             self.started.push(if let Some((t, _)) = st.token { self.tokens.push(t.clone()); self.token_left = Some(self.token_after); t } else { args[1].clone() });

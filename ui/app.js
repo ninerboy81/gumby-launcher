@@ -68,8 +68,10 @@ function drawGroups() {
     });
     const body = mine ? `<div class="steps">${L.steps.map(stepRow).join('')}</div>`
       : `<div class="chips">${names.map((n, i) => `<span class="chip"><b>${i + 1}</b>${esc(n)}</span>`).join('')}</div>`;
+    const opened = g.accounts.filter((id) => openOf(id)).length;
+    const launchBtn = `<button class="btn primary big" data-act="launch" data-id="${g.id}" ${L.busy || opened ? 'disabled' : ''}>${ICON.play}${g.accounts.length > 1 ? 'Launch all' : 'Launch'}</button>`;
     const acts = live ? '<button class="btn quiet" data-act="stop">Stop</button>'
-      : `<button class="btn primary big" data-act="launch" data-id="${g.id}" ${L.busy ? 'disabled' : ''}>${ICON.play}${g.accounts.length > 1 ? 'Launch all' : 'Launch'}</button>
+      : `${opened ? `<div class="stack">${launchBtn}<button class="btn closeall" data-act="closeall" data-id="${g.id}">${opened > 1 ? `Close all ${opened}` : 'Close game'}</button></div>` : launchBtn}
          <button class="iconbtn" data-act="editgroup" data-id="${g.id}" title="Edit group" aria-label="Edit ${esc(g.name)}">${ICON.pen}</button>`;
     const n = g.accounts.length;
     return `<div class="group"><div><div class="name">${esc(g.name)}</div>
@@ -364,6 +366,10 @@ document.addEventListener('click', async (ev) => {
       break;
     }
     case 'stop': await invoke('stop'); refresh(); break;
+    case 'closeall':
+      if (el.dataset.sure !== '1') { el.dataset.sure = '1'; el.textContent = 'Close them?'; setTimeout(() => { if (el.isConnected) { el.dataset.sure = ''; refresh(); } }, 4000); break; }
+      try { const n = await invoke('close_group', { id }); toast(`Closing ${n} game${n === 1 ? '' : 's'}`, true); } catch (e) { toast(String(e)); }
+      refresh(); break;
     case 'reportsend':
       try { await invoke('report_send', { id }); sendWatch = { id, seen: false }; el.disabled = true; el.textContent = 'Sending…'; } catch (e) { toast(String(e)); }
       break;
