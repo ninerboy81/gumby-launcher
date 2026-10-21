@@ -12,6 +12,12 @@ $rc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\rc.exe" 
 if ($rc) { $env:RC = $rc.FullName }
 & robocopy $repo "$build\src" /MIR /XD target dist .git gen /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
+# the owner's own icon (art\icon.ico, kept out of the repo) replaces the plain one for the exe and the taskbar
+if (Test-Path "$repo\art\icon.ico") {
+  Copy-Item "$repo\art\icon.ico" "$build\src\app\icons\icon.ico" -Force
+  (Get-Item "$build\src\app\build.rs").LastWriteTime = Get-Date   # the icon is compiled in by build.rs: make it run again
+  'using art\icon.ico'
+}
 Push-Location "$build\src"
 try {
   $offline = if ($env:LAUNCHER_ONLINE) { '' } else { '--offline' }

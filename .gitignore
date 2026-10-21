@@ -6,3 +6,4 @@
 # the owner's logo art: used in local builds, not published
 /ui/logo.png
 /gumby.png*
+/art/
