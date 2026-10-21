@@ -50,7 +50,12 @@ function stepRow(s, i) {
   return `<div class="step ${cls}">${mark}<span>${i + 1} · ${esc(s.name)}</span><span class="st">${esc(note)}</span></div>`;
 }
 
+// Close all: hold the button 3 seconds (it counts 3, 2, 1); letting go early does nothing
+const HOLD_MS = 3000;
+let hold = null;   // {id, el, start, timer}
+
 function drawGroups() {
+  if (hold) return;   // the button being held must not be redrawn under the finger
   const L = S.launch;
   const box = $('groups');
   if (!S.groups.length) {
@@ -71,7 +76,7 @@ function drawGroups() {
     const opened = g.accounts.filter((id) => openOf(id)).length;
     const launchBtn = `<button class="btn primary big" data-act="launch" data-id="${g.id}" ${L.busy || opened ? 'disabled' : ''}>${ICON.play}${g.accounts.length > 1 ? 'Launch all' : 'Launch'}</button>`;
     const acts = live ? '<button class="btn quiet" data-act="stop">Stop</button>'
-      : `${opened ? `<div class="stack">${launchBtn}<button class="btn closeall" data-act="closeall" data-id="${g.id}">${opened > 1 ? `Close all ${opened}` : 'Close game'}</button></div>` : launchBtn}
+      : `${opened ? `<div class="stack">${launchBtn}<button class="btn closeall" data-hold="closeall" data-id="${g.id}" title="Hold for 3 seconds">${opened > 1 ? `Hold to close all ${opened}` : 'Hold to close'}</button></div>` : launchBtn}
          <button class="iconbtn" data-act="editgroup" data-id="${g.id}" title="Edit group" aria-label="Edit ${esc(g.name)}">${ICON.pen}</button>`;
     const n = g.accounts.length;
     return `<div class="group"><div><div class="name">${esc(g.name)}</div>
@@ -366,10 +371,6 @@ document.addEventListener('click', async (ev) => {
       break;
     }
     case 'stop': await invoke('stop'); refresh(); break;
-    case 'closeall':
-      if (el.dataset.sure !== '1') { el.dataset.sure = '1'; el.textContent = 'Close them?'; setTimeout(() => { if (el.isConnected) { el.dataset.sure = ''; refresh(); } }, 4000); break; }
-      try { const n = await invoke('close_group', { id }); toast(`Closing ${n} game${n === 1 ? '' : 's'}`, true); } catch (e) { toast(String(e)); }
-      refresh(); break;
     case 'reportsend':
       try { await invoke('report_send', { id }); sendWatch = { id, seen: false }; el.disabled = true; el.textContent = 'Sending…'; } catch (e) { toast(String(e)); }
       break;
@@ -392,6 +393,41 @@ document.addEventListener('click', async (ev) => {
       break;
   }
 });
+function endHold(cancelled) {
+  if (!hold) return;
+  clearTimeout(hold.timer);
+  const short = Date.now() - hold.start < 600;
+  hold = null;
+  drawGroups();
+  if (cancelled && short) toast('Hold the button for 3 seconds to close the games', true);
+}
+document.addEventListener('pointerdown', (ev) => {
+  const el = ev.target.closest('[data-hold=closeall]');
+  if (!el || ev.button !== 0) return;
+  ev.preventDefault();
+  hold = { id: el.dataset.id, el, start: Date.now() };
+  el.classList.add('holding');
+  const tick = async () => {
+    if (!hold || hold.el !== el) return;
+    const gone = Date.now() - hold.start;
+    if (gone >= HOLD_MS) {
+      const id = hold.id;
+      hold = null;
+      el.textContent = 'Closing…';
+      try { const n = await invoke('close_group', { id }); toast(`Closing ${n} game${n === 1 ? '' : 's'}`, true); } catch (e) { toast(String(e)); }
+      refresh();
+      return;
+    }
+    el.textContent = `${Math.ceil((HOLD_MS - gone) / 1000)}…`;
+    el.style.setProperty('--p', `${(gone / HOLD_MS) * 100}%`);
+    hold.timer = setTimeout(tick, 50);
+  };
+  tick();
+});
+document.addEventListener('pointerup', () => endHold(true));
+document.addEventListener('pointercancel', () => endHold(true));
+document.addEventListener('pointerout', (ev) => { if (hold && ev.target === hold.el && !hold.el.contains(ev.relatedTarget)) endHold(true); });
+
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape' && dialog) closeDialog();
   if (ev.key === 'Enter' && dialog && ev.target.tagName === 'INPUT') {
