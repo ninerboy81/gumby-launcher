@@ -42,7 +42,11 @@ struct File {
     #[serde(default)] groups: Vec<Group>,
     #[serde(default)] allow_multi: bool,
     #[serde(default)] game_folder: Option<String>,
+    #[serde(default)] fav_zones: Vec<String>,
+    #[serde(default = "yes")] alert_next: bool,
+    #[serde(default = "yes")] alert_sound: bool,
 }
+fn yes() -> bool { true }
 
 /// What the add/edit account dialog sends. An empty password on an edit keeps the saved one.
 #[derive(Deserialize, Default)]
@@ -173,6 +177,19 @@ impl Store {
 
     pub fn set_allow_multi(&mut self, on: bool) -> Result<(), String> { self.data.allow_multi = on; self.save() }
 
+    /// Terror zone alerts: the starred zone groups (keys of zones::GROUPS), and the two options.
+    pub fn fav_zones(&self) -> &[String] { &self.data.fav_zones }
+    pub fn alert_next(&self) -> bool { self.data.alert_next }
+    pub fn alert_sound(&self) -> bool { self.data.alert_sound }
+    pub fn set_alerts(&mut self, zones: Vec<String>, next: bool, sound: bool) -> Result<(), String> {
+        let mut keep: Vec<String> = Vec::new();
+        for z in zones { if crate::zones::GROUPS.iter().any(|g| g.0 == z) && !keep.contains(&z) { keep.push(z); } }
+        self.data.fav_zones = keep;
+        self.data.alert_next = next;
+        self.data.alert_sound = sound;
+        self.save()
+    }
+
     pub fn set_game_folder(&mut self, folder: Option<String>) -> Result<(), String> {
         if let Some(f) = &folder {
             if !Path::new(f).join("D2R.exe").is_file() { return Err("D2R.exe is not in that folder".into()); }
@@ -204,7 +221,9 @@ impl Store {
         let accounts: Vec<Value> = self.data.accounts.iter().map(|a| json!({"id": a.id, "name": a.name, "email": a.email,
             "region": a.region, "tag": region_tag(&a.region), "method": a.method})).collect();
         let groups: Vec<Value> = self.data.groups.iter().map(|g| json!({"id": g.id, "name": g.name, "accounts": g.accounts})).collect();
-        json!({"accounts": accounts, "groups": groups, "allow_multi": self.data.allow_multi, "max_accounts": MAX_ACCOUNTS, "max_group": MAX_GROUP,
+        let zone_groups: Vec<Value> = crate::zones::GROUPS.iter().map(|g| json!({"key": g.0, "name": g.1, "act": g.2, "ids": g.3})).collect();
+        json!({"fav_zones": self.data.fav_zones, "alert_next": self.data.alert_next, "alert_sound": self.data.alert_sound, "zone_groups": zone_groups,
+            "accounts": accounts, "groups": groups, "allow_multi": self.data.allow_multi, "max_accounts": MAX_ACCOUNTS, "max_group": MAX_GROUP,
             "regions": REGIONS.iter().map(|r| r.0).collect::<Vec<_>>()})
     }
 }

@@ -69,6 +69,10 @@ pub struct Engine {
     update: Value,                    // {state: idle|checking|current|ready|error, ...}
     update_path: Option<PathBuf>,
     check_now: bool,
+    alert: Option<Value>,             // the terror zone alert shown now (the pop-up reads it)
+    alert_new: bool,                  // not shown yet
+    alerted: std::collections::HashSet<String>,   // "now:<key>:<switch_at>" / "next:..." already shown
+    titled: Option<Instant>,          // window titles last checked
     signin: &'static str,             // Battle.net sign-in window: idle | waiting | done
     pending_token: Option<String>,    // the token it caught, until the account is saved
     pub token_written: Option<Vec<u8>>, // kept across ticks for WinGames (see there)
@@ -81,7 +85,8 @@ impl Engine {
         Engine { store: Store::load(dir), launcher: Launcher::default(), tiler: Tiler::default(), order: Vec::new(), by_account: HashMap::new(),
             found: None, looked: None, reports: report::Reports::new(dir), seen_failures: 0, sending: None, send_now: None,
             zones: Value::Null, zones_at: None, update: json!({"state": "idle"}), update_path: None, check_now: true,
-            signin: "idle", pending_token: None, token_written: None }
+            signin: "idle", pending_token: None, token_written: None, alert: None, alert_new: false,
+            alerted: std::collections::HashSet::new(), titled: None }
     }
 
     /// The game folder, found on this PC by itself (a running game, Battle.net's and Steam's records, the usual folders
@@ -112,6 +117,14 @@ impl Engine {
         for (account, pid) in self.launcher.opened() { self.by_account.insert(account, pid); }
         let running = self.running(games);
         self.tiler.tick(now, &running, screen);
+        if self.titled.map_or(true, |t| now.duration_since(t).as_millis() >= 2000) {   // each game window named after its account
+            self.titled = Some(now);
+            for (account, pid) in self.by_account.clone() {
+                let Some(a) = self.store.account(&account) else { continue };
+                let want = format!("{} · Diablo II: Resurrected", a.name);
+                for (_, w) in screen.windows(&[pid]) { if screen.title(w) != want { screen.set_title(w, &want); } }
+            }
+        }
         if self.launcher.failures > self.seen_failures {   // a launch stopped: keep a report and offer to send it
             self.seen_failures = self.launcher.failures;
             self.reports.write("launch", &format!("Launch stopped: {}", self.launcher.last_failure), VERSION);
@@ -141,7 +154,32 @@ impl Engine {
     }
     pub fn net_set_zones(&mut self, z: Result<Value, String>) {
         self.zones_at = Some(Instant::now());
-        match z { Ok(v) => self.zones = v, Err(e) => { if self.zones.is_null() || self.zones.get("error").is_some() { self.zones = json!({"error": e}); } } }
+        match z { Ok(v) => { self.zones = v; self.check_alerts(); } Err(e) => { if self.zones.is_null() || self.zones.get("error").is_some() { self.zones = json!({"error": e}); } } }
+    }
+
+    /// A starred zone is up now (or next, if asked for): one alert per zone per half hour.
+    fn check_alerts(&mut self) {
+        let favs = self.store.fav_zones().to_vec();
+        if favs.is_empty() { return; }
+        let ids = |k: &str| -> Vec<i64> { self.zones[k].as_array().map(|a| a.iter().filter_map(|x| x.as_i64()).collect()).unwrap_or_default() };
+        let switch = self.zones["switch_at"].as_i64().unwrap_or(0);
+        let mut found: Option<(&str, String)> = None;
+        if let Some(k) = zones::starred_in(&ids("now_ids"), &favs).first() { found = Some(("now", (*k).clone())); }
+        else if self.store.alert_next() {
+            if let Some(k) = zones::starred_in(&ids("next_ids"), &favs).first() { found = Some(("next", (*k).clone())); }
+        }
+        let Some((kind, key)) = found else { return };
+        if !self.alerted.insert(format!("{}:{}:{}", kind, key, switch)) { return; }
+        let g = zones::GROUPS.iter().find(|g| g.0 == key).unwrap();
+        self.alert = Some(json!({"kind": kind, "zone": g.1, "act": g.2, "switch_at": switch}));
+        self.alert_new = true;
+        report::log(format!("terror zone alert: {} ({})", g.1, kind));
+    }
+    /// A new alert to pop up: (alert, play a sound).
+    pub fn net_take_alert(&mut self) -> Option<(Value, bool)> {
+        if !self.alert_new { return None; }
+        self.alert_new = false;
+        self.alert.clone().map(|a| (a, self.store.alert_sound()))
     }
     /// The report to send now, scrubbed: (id, text, reason).
     pub fn net_take_send(&mut self) -> Option<(String, String, String)> {
@@ -195,6 +233,11 @@ impl Engine {
                 r
             }
             "signin_status" => Ok(json!({"state": self.signin})),
+            "set_alerts" => {
+                let zones: Vec<String> = p["zones"].as_array().map(|a| a.iter().filter_map(|z| z.as_str().map(String::from)).collect()).unwrap_or_default();
+                self.store.set_alerts(zones, p["next"].as_bool().unwrap_or(true), p["sound"].as_bool().unwrap_or(true)).map(|_| Value::Bool(true))
+            }
+            "alert" => Ok(self.alert.clone().unwrap_or(Value::Null)),
             "signin_reset" => { self.signin = "idle"; self.pending_token = None; Ok(Value::Bool(true)) }
             "account_remove" => self.store.remove_account(&s(p, "id")).map(|_| Value::Bool(true)),
             "group_save" => {
@@ -262,12 +305,14 @@ mod tests {
 
     const MON: Rect = Rect { x: 0, y: 0, w: 2560, h: 1440 };
     #[derive(Default)]
-    struct Shots { windows: Vec<(u32, isize)>, rects: HashMap<isize, Rect> }
+    struct Shots { windows: Vec<(u32, isize)>, rects: HashMap<isize, Rect>, titles: HashMap<isize, String> }
     impl Screen for Shots {
         fn windows(&mut self, pids: &[u32]) -> Vec<(u32, isize)> { self.windows.iter().copied().filter(|w| pids.contains(&w.0)).collect() }
         fn monitor_of(&mut self, _: isize) -> Option<Rect> { Some(MON) }
         fn rect_of(&mut self, w: isize) -> Option<Rect> { self.rects.get(&w).copied() }
         fn move_window(&mut self, w: isize, to: Rect) -> bool { self.rects.insert(w, to); true }
+        fn title(&mut self, w: isize) -> String { self.titles.get(&w).cloned().unwrap_or_default() }
+        fn set_title(&mut self, w: isize, t: &str) { self.titles.insert(w, t.to_string()); }
     }
 
     #[test]
@@ -293,10 +338,38 @@ mod tests {
         assert_eq!(g.started, vec!["barb@example.com", "sorc@example.com", "pally@example.com"]);
         let pids: Vec<u32> = g.procs.iter().map(|p| p.0).collect();
         for (slot, pid) in pids.iter().enumerate() { assert_eq!(screen.rects[&(*pid as isize)], quarter(MON, slot)); }
+        // each game window carries its account's name
+        assert_eq!(screen.titles[&(pids[0] as isize)], "barb · Diablo II: Resurrected");
+        assert_eq!(screen.titles[&(pids[2] as isize)], "pally · Diablo II: Resurrected");
         let v = e.view(&mut g);
         assert_eq!(v["running"], 3);
         assert_eq!(v["open"].as_array().unwrap().len(), 3);
         assert!(!v.to_string().contains("\"pw\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_starred_zone_alerts_once_per_half_hour_and_next_only_when_asked() {
+        let dir = std::env::temp_dir().join(format!("d2r-launcher-alerts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(&dir);
+        let mut g = FakeGames::default();
+        let t = Instant::now();
+        let feed = |now: &str, next: &str, at: i64| zones::parse(format!(r#"{{"current":[{}],"next":[{}],"switch_at":{}}}"#, now, next, at).as_bytes());
+        e.net_set_zones(feed(r#"{"id":108,"name":"The Chaos Sanctuary"}"#, r#"{"id":39,"name":"The Secret Cow Level"}"#, 1000));
+        assert!(e.net_take_alert().is_none());   // nothing starred yet
+        e.call(t, "set_alerts", &json!({"zones": ["chaos", "cows", "not-a-zone"], "next": true, "sound": false}), &mut g).unwrap();
+        assert_eq!(e.store.fav_zones(), &["chaos".to_string(), "cows".to_string()]);
+        e.net_set_zones(feed(r#"{"id":108,"name":"The Chaos Sanctuary"}"#, r#"{"id":39,"name":"The Secret Cow Level"}"#, 1000));
+        let (a, sound) = e.net_take_alert().unwrap();
+        assert_eq!((a["kind"].as_str(), a["zone"].as_str(), sound), (Some("now"), Some("The Chaos Sanctuary"), false));
+        e.net_set_zones(feed(r#"{"id":108,"name":"The Chaos Sanctuary"}"#, r#"{"id":39,"name":"The Secret Cow Level"}"#, 1000));
+        assert!(e.net_take_alert().is_none());   // the same half hour: once
+        e.net_set_zones(feed(r#"{"id":4,"name":"Stony Field"}"#, r#"{"id":39,"name":"The Secret Cow Level"}"#, 2800));
+        assert_eq!(e.net_take_alert().unwrap().0["kind"], "next");
+        e.call(t, "set_alerts", &json!({"zones": ["cows"], "next": false, "sound": true}), &mut g).unwrap();
+        e.net_set_zones(feed(r#"{"id":4,"name":"Stony Field"}"#, r#"{"id":39,"name":"The Secret Cow Level"}"#, 4600));
+        assert!(e.net_take_alert().is_none());   // "next" turned off
         let _ = std::fs::remove_dir_all(&dir);
     }
 

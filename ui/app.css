@@ -235,3 +235,25 @@ pre.report { background: rgba(0,0,0,.4); border: 1px solid var(--seam); border-r
 .btn.closeall { user-select: none; touch-action: none; font-variant-numeric: tabular-nums; }
 .btn.closeall.holding { color: #fff; border-color: rgba(255,140,130,.75); font-size: 15px;
   background: linear-gradient(90deg, rgba(255,110,100,.55) var(--p, 0%), rgba(255,120,110,.10) var(--p, 0%)); }
+
+/* terror zone alerts */
+.tzstar { color: #ffcf8a; text-shadow: 0 0 10px rgba(255,190,110,.7); }
+.zlist { display: grid; gap: 12px; max-height: 360px; overflow-y: auto; padding-right: 4px; }
+.zact { display: grid; grid-template-columns: 52px 1fr; gap: 10px; align-items: start; }
+.zactn { color: var(--ash); font-size: 12px; padding-top: 7px; }
+.zchip { padding: 6px 11px; cursor: pointer; color: var(--bone); font-size: 12.5px; }
+.zchip.on { background: rgba(227,138,82,.18); border-color: rgba(227,138,82,.55); color: #ffe0c8; }
+.opt { display: flex; gap: 10px; align-items: center; margin-top: 12px; color: var(--bone); font-size: 13.5px; background: none; border: 0; padding: 0; }
+.box2 { width: 18px; height: 18px; border-radius: 5px; border: 2px solid #4b4860; display: grid; place-items: center; font-size: 12px; flex: none; }
+.box2.on { background: linear-gradient(180deg,#5fe3bb,#2fb88e); border-color: transparent; color: #04241a; }
+html:has(body.alertmode), body.alertmode { background: transparent; min-height: 0; overflow: hidden; }
+.alertmode .top, .alertmode main, .alertmode #update, .alertmode #modal, .alertmode #toast { display: none; }
+.zalert { position: fixed; inset: 6px; border-radius: 18px; padding: 14px 18px; color: var(--bone); cursor: pointer;
+  background: linear-gradient(170deg, rgba(60,36,22,.98), rgba(20,16,22,.98)); border: 1px solid rgba(227,138,82,.55);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 0 22px -6px rgba(227,138,82,.8); }
+.zalert .k { color: #ffcfae; font-size: 12px; display: flex; gap: 8px; align-items: center; }
+.zalert .k img { width: 20px; height: 20px; border-radius: 5px; }
+.zalert .z { font: 600 21px/1.2 var(--display); margin: 6px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.zalert .s { color: var(--ash); font-size: 13px; }
+.zalert .x { position: absolute; right: 14px; top: 10px; color: var(--ash); }
+.tz .z { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

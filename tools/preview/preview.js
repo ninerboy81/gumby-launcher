@@ -24,8 +24,13 @@
   };
   const now = Date.now() / 1000;
   state.version = '0.1.0';
+  state.fav_zones = ['chaos', 'cows', 'tunnels']; state.alert_next = true; state.alert_sound = true;
+  state.zone_groups = [['blood-moor','Blood Moor & Den of Evil',1],['tower','Forgotten Tower (Countess)',1],['pit','The Pit (Tamoe Highland)',1],['cows','The Secret Cow Level',1],
+    ['tunnels','Ancient Tunnels',2],['arcane','Arcane Sanctuary',2],['tal-rasha',"Tal Rasha's Tombs & Canyon of the Magi",2],['travincal','Travincal',3],['durance','Durance of Hate (Mephisto)',3],
+    ['chaos','The Chaos Sanctuary',4],['city-damned','City of the Damned & River of Flame',4],['nihlathak',"Nihlathak's Temple & Halls",5],['wsk','Worldstone Keep & Throne of Destruction',5]]
+    .map(([key, name, act]) => ({ key, name, act, ids: key === 'chaos' ? [108] : [] }));
   state.zones = s === 'empty' ? { error: 'Terror zones are not reachable right now' }
-    : { now: 'The Chaos Sanctuary', now_act: 4, next: "Tal Rasha's Tomb, Canyon of the Magi", switch_at: Math.floor(now) + 1421 };
+    : { now: 'The Chaos Sanctuary', now_act: 4, now_ids: [108], next: "Tal Rasha's Tomb, Canyon of the Magi", next_ids: [66, 46], switch_at: Math.floor(now) + 1421 };
   state.update = s === 'home' ? { state: 'ready', version: '0.2.0', notes: 'Groups can be dragged into a new order.' }
     : { state: 'current', checked_at: Math.floor(now) - 120 };
   state.report = s === 'report' ? { id: '20261020-211415-launch-1', reason: 'Launch stopped: game 2: D2R closed right after starting', sending: false,

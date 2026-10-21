@@ -24,6 +24,8 @@ pub trait Screen {
     fn monitor_of(&mut self, window: isize) -> Option<Rect>;
     fn rect_of(&mut self, window: isize) -> Option<Rect>;
     fn move_window(&mut self, window: isize, to: Rect) -> bool;
+    fn title(&mut self, window: isize) -> String;
+    fn set_title(&mut self, window: isize, title: &str);
 }
 
 #[derive(Default)]
@@ -71,6 +73,8 @@ impl Screen for WinScreen {
     fn monitor_of(&mut self, window: isize) -> Option<Rect> { crate::win::monitor_of(window) }
     fn rect_of(&mut self, window: isize) -> Option<Rect> { crate::win::window_rect(window) }
     fn move_window(&mut self, window: isize, to: Rect) -> bool { crate::win::move_window(window, to) }
+    fn title(&mut self, window: isize) -> String { crate::win::window_title(window) }
+    fn set_title(&mut self, window: isize, title: &str) { crate::win::set_window_title(window, title) }
 }
 
 #[cfg(test)]
@@ -87,6 +91,8 @@ mod tests {
         fn monitor_of(&mut self, _: isize) -> Option<Rect> { Some(MON) }
         fn rect_of(&mut self, w: isize) -> Option<Rect> { self.rects.get(&w).copied() }
         fn move_window(&mut self, w: isize, to: Rect) -> bool { self.rects.insert(w, to); self.moves += 1; true }
+        fn title(&mut self, _: isize) -> String { String::new() }
+        fn set_title(&mut self, _: isize, _: &str) {}
     }
 
     #[test]

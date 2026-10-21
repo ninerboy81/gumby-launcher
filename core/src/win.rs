@@ -57,7 +57,11 @@ extern "system" {
     fn GetMonitorInfoW(m: H, info: *mut MONITORINFO) -> i32;
     fn GetWindowRect(hwnd: H, r: *mut RECT) -> i32;
     fn PostMessageW(hwnd: H, msg: u32, w: usize, l: isize) -> i32;
+    fn GetWindowTextW(hwnd: H, buf: *mut u16, max: i32) -> i32;
+    fn SetWindowTextW(hwnd: H, text: *const u16) -> i32;
 }
+#[link(name = "winmm")]
+extern "system" { fn PlaySoundW(sound: *const u16, module: H, flags: u32) -> i32; }
 #[link(name = "crypt32")]
 extern "system" {
     fn CryptProtectData(input: *const DataBlob, desc: *const u16, entropy: *const DataBlob, reserved: *mut c_void, prompt: *mut c_void, flags: u32, out: *mut DataBlob) -> i32;
@@ -137,6 +141,18 @@ pub fn window_rect(hwnd: isize) -> Option<Rect> {
     if unsafe { GetWindowRect(hwnd as H, &mut r) } == 0 { return None; }
     Some(Rect { x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top })
 }
+
+/// A window's title bar text.
+pub fn window_title(hwnd: isize) -> String {
+    let mut buf = vec![0u16; 512];
+    let n = unsafe { GetWindowTextW(hwnd as H, buf.as_mut_ptr(), buf.len() as i32) };
+    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+}
+/// Renames a window's title bar (the game itself is not touched).
+pub fn set_window_title(hwnd: isize, title: &str) { unsafe { SetWindowTextW(hwnd as H, wide(title).as_ptr()); } }
+
+/// Windows' own notification sound, without waiting for it.
+pub fn notify_sound() { unsafe { PlaySoundW(wide("SystemNotification").as_ptr(), std::ptr::null_mut(), 0x0001 | 0x0002_0000 | 0x0010); } }   // ASYNC | SND_ALIAS | NODEFAULT
 
 /// Closes a game the way its window's X button does (the game saves and exits); one still running 15 seconds later is
 /// ended. Only a process that is still D2R.exe is touched.

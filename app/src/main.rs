@@ -16,6 +16,10 @@ fn unix_now() -> i64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as
 
 #[tauri::command]
 fn call(app: tauri::AppHandle, state: tauri::State<'_, App>, op: String, p: Value) -> Result<Value, String> {
+    if op == "alert_dismiss" {
+        if let Some(w) = app.get_webview_window("alert") { let _ = w.close(); }
+        return Ok(Value::Bool(true));
+    }
     let mut engine = state.0.lock().map_err(|_| "The launcher is busy, try again".to_string())?;
     if op == "update_apply" {
         let path = engine.update_ready().ok_or("No update is ready")?;
@@ -58,7 +62,32 @@ async fn signin(app: tauri::AppHandle, state: tauri::State<'_, App>, region: Str
     Ok(())
 }
 
-fn network(engine: Arc<Mutex<Engine>>) {
+/// The terror zone alert: a small window in the bottom-right corner, on top of the game, that does not take the
+/// keyboard from it; it closes itself after a few seconds (the page asks for "alert_dismiss").
+fn show_alert(app: &tauri::AppHandle, sound: bool) {
+    if let Some(w) = app.get_webview_window("alert") { let _ = w.close(); std::thread::sleep(Duration::from_millis(150)); }
+    let (w, h) = (400.0, 132.0);
+    let (x, y) = match app.primary_monitor() {
+        Ok(Some(m)) => { let s = m.scale_factor(); let size = m.size(); let pos = m.position();
+            (pos.x as f64 / s + size.width as f64 / s - w - 18.0, pos.y as f64 / s + size.height as f64 / s - h - 64.0) }
+        _ => (100.0, 100.0),
+    };
+    let built = WebviewWindowBuilder::new(app, "alert", WebviewUrl::App("index.html?alert=1".into()))
+        .title("Terror zone")
+        .inner_size(w, h)
+        .position(x, y)
+        .decorations(false)
+        .transparent(true)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .resizable(false)
+        .focused(false)
+        .build();
+    if built.is_ok() && sound { win::notify_sound(); }
+}
+
+fn network(engine: Arc<Mutex<Engine>>, app: tauri::AppHandle) {
     let mut last_check: Option<Instant> = None;
     std::thread::sleep(Duration::from_secs(2));
     loop {
@@ -68,7 +97,8 @@ fn network(engine: Arc<Mutex<Engine>>) {
         };
         if zones_due {
             let z = zones::fetch();
-            if let Ok(mut e) = engine.lock() { e.net_set_zones(z); }
+            let alert = match engine.lock() { Ok(mut e) => { e.net_set_zones(z); e.net_take_alert() } Err(_) => None };
+            if let Some((_, sound)) = alert { show_alert(&app, sound); }
         }
         if let Some((id, text, reason)) = send {
             let install = report::install_id(&data_dir());
@@ -101,8 +131,12 @@ fn main() {
         }
     });
     let net = engine.clone();
-    std::thread::spawn(move || network(net));
     let app = tauri::Builder::default()
+        .setup(move |app| {
+            let handle = app.handle().clone();
+            std::thread::spawn(move || network(net, handle));
+            Ok(())
+        })
         .manage(App(engine))
         .invoke_handler(tauri::generate_handler![call, signin])
         .run(tauri::generate_context!());

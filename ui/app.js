@@ -47,6 +47,7 @@ function stepRow(s, i) {
   let note = s.note || (s.state === 'waiting' ? 'Next' : '');
   const o = openOf(s.account);
   if (s.state === 'done' && o && o.quarter != null) note = 'Open, ' + QUARTER[o.quarter];
+  if (s.state === 'done' && !o) note = 'Closed';
   return `<div class="step ${cls}">${mark}<span>${i + 1} · ${esc(s.name)}</span><span class="st">${esc(note)}</span></div>`;
 }
 
@@ -63,7 +64,8 @@ function drawGroups() {
     return;
   }
   box.innerHTML = S.groups.map((g) => {
-    const mine = L.group === g.id && L.steps.length;
+    // the progress list stays while the group opens, while any of its games is open, or after a failure
+    const mine = L.group === g.id && L.steps.length && (L.busy || L.error || g.accounts.some((id) => openOf(id)));
     const live = mine && L.busy;
     const names = g.accounts.map((id) => acct(id)?.name ?? '?');
     const cells = g.accounts.map((id, i) => {
@@ -129,9 +131,11 @@ function drawZones() {
     box.innerHTML = `<div class="glass tz quiet">${z.error ? esc(z.error) : 'Terror zones: waiting for the next update'}</div>`;
     return;
   }
-  box.innerHTML = `<div class="glass tz"><div><div class="k"><span class="live"></span>Terror zone now</div><div class="z">${esc(z.now)}</div>
+  const starred = (ids) => (S.fav_zones || []).some((k) => (S.zone_groups.find((g) => g.key === k)?.ids || []).some((a) => (ids || []).includes(a)));
+  const star = (on) => (on ? '<span class="tzstar" title="One of your starred zones">★</span> ' : '');
+  box.innerHTML = `<div class="glass tz"><div><div class="k"><span class="live"></span>Terror zone now</div><div class="z">${star(starred(z.now_ids))}${esc(z.now)}</div>
       ${z.now_act ? `<div class="act">Act ${z.now_act}</div>` : ''}</div>
-    <div><div class="k">Next</div><div class="z next">${z.next ? esc(z.next) : 'Not known yet'}</div></div>
+    <div><div class="k">Next</div><div class="z next">${z.next ? star(starred(z.next_ids)) + esc(z.next) : 'Not known yet'}</div></div>
     <div class="clock">${z.switch_at ? `<b id="tzclock">${clock(z.switch_at)}</b><span>until it changes</span>` : ''}</div></div>`;
 }
 function drawUpdate() {
@@ -263,6 +267,8 @@ function settingsDialog() {
         : `<p>Diablo II: Resurrected was not found on this PC. Install it with Battle.net, or paste the folder that holds D2R.exe.</p>
       <div style="display:flex;gap:8px;margin-top:8px"><div class="input" style="flex:1"><input id="f-folder" placeholder="D:\\Games\\Diablo II Resurrected" value=""></div>
       <button class="btn" data-act="setfolder">Use this folder</button></div>`}</div></div>
+    <div class="switchrow"><div><h4 class="title">Terror zone alerts</h4><p>${S.fav_zones.length ? `${S.fav_zones.length} zone${S.fav_zones.length === 1 ? '' : 's'} starred: a small pop-up${S.alert_sound ? ' and a sound' : ''} when one comes up${S.alert_next ? ', and when one is next' : ''}.` : 'Star the zones you farm and get a pop-up when one comes up.'}</p></div>
+      <button class="btn" data-act="zonealerts">Choose zones</button></div>
     <div class="switchrow about"><div><h4 class="title">${esc(S.app)} ${esc(S.version)}</h4><p>${aboutText()}</p></div>
       <div style="display:flex;gap:8px"><button class="btn" data-act="reportnew">Send a report</button><button class="btn" data-act="checknow">Check now</button></div></div>
     <div class="err" id="f-err"></div>
@@ -291,6 +297,25 @@ function aboutText() {
   if (u.state === 'error') return `${esc(u.error)}.`;
   if (u.state === 'current') return `Up to date · checked ${ago(u.checked_at)}.`;
   return 'Updates download by themselves; you choose when to restart.';
+}
+
+let zonePick = null;   // the zone alert dialog's choices until Done
+function zonesDialog() {
+  zonePick = { zones: [...S.fav_zones], next: S.alert_next, sound: S.alert_sound };
+  openDialog('zones', `<h3 class="title">Terror zone alerts</h3>
+    <p class="lead">Star the zones you farm. When one comes up, the launcher tells you, even when it's behind the game.</p>
+    <div id="z-picks"></div>
+    <div class="err" id="f-err"></div>
+    <div class="foot"><button class="btn ghost" data-act="close">Cancel</button><button class="btn primary" data-act="zonesave">Done</button></div>`, 700);
+  drawZonePicks();
+}
+function drawZonePicks() {
+  const z = zonePick;
+  const acts = [1, 2, 3, 4, 5].map((a) => `<div class="zact"><span class="zactn">Act ${a}</span><div class="chips" style="gap:7px;margin:0">${S.zone_groups.filter((g) => g.act === a).map((g) =>
+    `<button class="chip zchip${z.zones.includes(g.key) ? ' on' : ''}" data-act="zstar" data-id="${g.key}">${z.zones.includes(g.key) ? '★' : '☆'} ${esc(g.name)}</button>`).join('')}</div></div>`).join('');
+  $('z-picks').innerHTML = `<div class="zlist">${acts}</div>
+    <button class="opt" data-act="znext"><span class="box2${z.next ? ' on' : ''}">${z.next ? '✓' : ''}</span>Also tell me when it's <b>next</b> (up to 30 minutes ahead)</button>
+    <button class="opt" data-act="zsound"><span class="box2${z.sound ? ' on' : ''}">${z.sound ? '✓' : ''}</span>Play a sound</button>`;
 }
 
 function multiDialog(n, run) {
@@ -378,6 +403,13 @@ document.addEventListener('click', async (ev) => {
     case 'reportnew':
       try { await invoke('report_new'); closeDialog(); reportAsked = null; await refresh(); } catch (e) { formError(e); }
       break;
+    case 'zonealerts': zonesDialog(); break;
+    case 'zstar': { const i = zonePick.zones.indexOf(id); if (i >= 0) zonePick.zones.splice(i, 1); else zonePick.zones.push(id); drawZonePicks(); break; }
+    case 'znext': zonePick.next = !zonePick.next; drawZonePicks(); break;
+    case 'zsound': zonePick.sound = !zonePick.sound; drawZonePicks(); break;
+    case 'zonesave':
+      try { await invoke('set_alerts', zonePick); closeDialog(); await refresh(); toast(zonePick.zones.length ? 'Alerts saved' : 'Alerts off', true); } catch (e) { formError(e); }
+      break;
     case 'checknow': try { await invoke('update_check'); await refresh(); settingsDialog(); } catch (e) { formError(e); } break;
     case 'restart': try { await invoke('update_apply'); } catch (e) { toast(String(e)); } break;
     case 'multigo': {
@@ -435,6 +467,22 @@ document.addEventListener('keydown', (ev) => {
     if (go) go.click();
   }
 });
+
+// the terror zone pop-up (index.html?alert=1): just the alert card, gone after 12 seconds
+if (new URLSearchParams(location.search).get('alert') === '1') {
+  document.body.classList.add('alertmode');
+  const dismiss = () => invoke('alert_dismiss').catch(() => {});
+  invoke('alert').then((a) => {
+    if (!a) { dismiss(); return; }
+    const until = new Date(a.switch_at * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    document.body.insertAdjacentHTML('beforeend', `<div class="zalert" data-act="alertclose">
+      <span class="x">✕</span><div class="k"><img src="logo.png" alt="" onerror="this.remove()">Terror zone ★ ${a.kind === 'now' ? 'now' : 'next'}</div>
+      <div class="z">${esc(a.zone)}</div><div class="s">Act ${a.act} · ${a.kind === 'now' ? `until ${until}` : `starts at ${until}`}</div></div>`);
+  }).catch(dismiss);
+  document.addEventListener('click', (e) => { if (e.target.closest('[data-act=alertclose]')) dismiss(); });
+  setTimeout(dismiss, 12000);
+  throw new Error('alert window');   // nothing else of the page runs here
+}
 
 $('gear').innerHTML = ICON.gear;
 $('gear').dataset.act = 'gear';
