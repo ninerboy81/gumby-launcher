@@ -31,15 +31,21 @@ pub fn data_dir() -> PathBuf {
     std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(DIR_NAME)
 }
 
-/// The real games: D2R.exe processes, started from the game folder.
-pub struct WinGames { pub folder: Option<PathBuf> }
+/// The real games: D2R.exe processes, started from the game folder. `token_written` is the sign-in value put in the
+/// registry for the game started last (the game replaces it at character select).
+pub struct WinGames { pub folder: Option<PathBuf>, pub token_written: Option<Vec<u8>> }
 impl Games for WinGames {
     fn running(&mut self) -> Vec<u32> { win::pids_named("D2R.exe") }
     fn has_window(&mut self, pid: u32) -> bool { !win::main_windows(&[pid]).is_empty() }
     fn close_lock(&mut self, pid: u32) -> Result<usize, String> { win::close_named_handles(pid, win::D2R_INSTANCE_LOCK) }
-    fn start(&mut self, args: Vec<String>) -> Result<(), String> {
-        let folder = self.folder.as_ref().ok_or("Could not find Diablo II: Resurrected. Set the game folder in Settings.")?;
-        let r = std::process::Command::new(folder.join("D2R.exe")).args(&args).current_dir(folder).spawn();
+    fn token_taken(&mut self) -> bool {
+        match &self.token_written { None => true, Some(w) => win::osi_token_value().map_or(true, |now| &now != w) }
+    }
+    fn start(&mut self, st: launch::Start) -> Result<(), String> {
+        let folder = self.folder.clone().ok_or("Could not find Diablo II: Resurrected. Set the game folder in Settings.")?;
+        self.token_written = match &st.token { Some((token, region)) => Some(win::set_osi_token(token, region)?), None => None };
+        let args = st.args;
+        let r = std::process::Command::new(folder.join("D2R.exe")).args(&args).current_dir(&folder).spawn();
         drop(args);
         r.map(|_child| ()).map_err(|e| format!("D2R did not start ({})", e.kind()))
     }
@@ -62,6 +68,9 @@ pub struct Engine {
     update: Value,                    // {state: idle|checking|current|ready|error, ...}
     update_path: Option<PathBuf>,
     check_now: bool,
+    signin: &'static str,             // Battle.net sign-in window: idle | waiting | done
+    pending_token: Option<String>,    // the token it caught, until the account is saved
+    pub token_written: Option<Vec<u8>>, // kept across ticks for WinGames (see there)
 }
 
 fn s(p: &Value, k: &str) -> String { p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string() }
@@ -70,7 +79,8 @@ impl Engine {
     pub fn new(dir: &std::path::Path) -> Engine {
         Engine { store: Store::load(dir), launcher: Launcher::default(), tiler: Tiler::default(), order: Vec::new(), by_account: HashMap::new(),
             found: None, looked: None, reports: report::Reports::new(dir), seen_failures: 0, sending: None, send_now: None,
-            zones: Value::Null, zones_at: None, update: json!({"state": "idle"}), update_path: None, check_now: true }
+            zones: Value::Null, zones_at: None, update: json!({"state": "idle"}), update_path: None, check_now: true,
+            signin: "idle", pending_token: None, token_written: None }
     }
 
     /// The game folder, found on this PC by itself (a running game, Battle.net's and Steam's records, the usual folders
@@ -114,10 +124,11 @@ impl Engine {
         for (i, a) in self.store.accounts().iter().enumerate() {
             out.push((a.email.clone(), "[email]".to_string()));
             out.push((a.name.clone(), format!("[account {}]", i + 1)));
-            if let Ok(pw) = self.store.password(&a.id) { out.push((pw, "[password]".to_string())); }
+            if let Ok(pw) = self.store.password(&a.id) { out.push((pw, if a.method == "token" { "[token]" } else { "[password]" }.to_string())); }
         }
         for (i, g) in self.store.groups().iter().enumerate() { out.push((g.name.clone(), format!("[group {}]", i + 1))); }
         if let Ok(user) = std::env::var("USERNAME") { out.push((user, "[user]".to_string())); }
+        if let Some(t) = &self.pending_token { out.push((t.clone(), "[token]".to_string())); }
         out
     }
 
@@ -155,6 +166,11 @@ impl Engine {
             Err(e) => json!({"state": "error", "error": e, "checked_at": unix_now}),
         };
     }
+    /// The Battle.net sign-in window opened / caught a token / closed without one.
+    pub fn signin_opened(&mut self) { self.signin = "waiting"; self.pending_token = None; }
+    pub fn signin_token(&mut self, token: String) { self.pending_token = Some(token); self.signin = "done"; report::log("Battle.net sign-in: token received"); }
+    pub fn signin_closed(&mut self) { if self.signin == "waiting" { self.signin = "idle"; } }
+
     /// The downloaded update, once one is ready.
     pub fn update_ready(&self) -> Option<PathBuf> { if self.update["state"] == "ready" { self.update_path.clone() } else { None } }
 
@@ -171,9 +187,14 @@ impl Engine {
         match op {
             "state" => Ok(self.view(games)),
             "account_save" => {
-                let input: AccountInput = serde_json::from_value(p.clone()).map_err(|_| "Fill in every field".to_string())?;
-                self.store.save_account(input).map(Value::from)
+                let mut input: AccountInput = serde_json::from_value(p.clone()).map_err(|_| "Fill in every field".to_string())?;
+                if input.method == "token" { input.token = self.pending_token.clone(); }
+                let r = self.store.save_account(input).map(Value::from);
+                if r.is_ok() { self.pending_token = None; self.signin = "idle"; }
+                r
             }
+            "signin_status" => Ok(json!({"state": self.signin})),
+            "signin_reset" => { self.signin = "idle"; self.pending_token = None; Ok(Value::Bool(true)) }
             "account_remove" => self.store.remove_account(&s(p, "id")).map(|_| Value::Bool(true)),
             "group_save" => {
                 let input: GroupInput = serde_json::from_value(p.clone()).map_err(|_| "Give the group a name and pick accounts".to_string())?;
@@ -283,6 +304,26 @@ mod tests {
         assert_eq!(g.started, vec!["a@example.com"]);
         assert_eq!(e.call(t, "play", &json!({"id": b}), &mut g), Err("needs_multi:2".into()));
         assert!(e.call(t, "set_folder", &json!({"folder": "C:\\nowhere"}), &mut g).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_caught_token_goes_into_the_saved_account_only() {
+        let dir = std::env::temp_dir().join(format!("d2r-launcher-signin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut e = Engine::new(&dir);
+        let mut g = FakeGames::default();
+        let t = Instant::now();
+        assert!(e.call(t, "account_save", &json!({"name": "Mule", "region": "Americas", "method": "token"}), &mut g).is_err());
+        e.signin_opened();
+        assert_eq!(e.call(t, "signin_status", &json!({}), &mut g).unwrap()["state"], "waiting");
+        e.signin_token("US-0123456789abcdef-7".into());
+        assert_eq!(e.call(t, "signin_status", &json!({}), &mut g).unwrap()["state"], "done");
+        // a token sent by the page itself is ignored: only the caught one counts
+        let id = e.call(t, "account_save", &json!({"name": "Mule", "region": "Americas", "method": "token", "token": "US-evil-1"}), &mut g).unwrap();
+        assert_eq!(e.store.password(id.as_str().unwrap()).unwrap(), "US-0123456789abcdef-7");
+        assert_eq!(e.call(t, "signin_status", &json!({}), &mut g).unwrap()["state"], "idle");
+        assert!(!e.view(&mut g).to_string().contains("0123456789abcdef"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

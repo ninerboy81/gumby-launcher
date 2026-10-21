@@ -24,6 +24,7 @@
   setTimeout(() => {
     const s = new URLSearchParams(location.search).get('s');
     if (s === 'add') accountDialog(null);
+    if (s === 'token' || s === 'signedin') { accountDialog(null); acctForm.method = 'token'; if (s === 'signedin') acctForm.signin = 'done'; drawMethod(); document.getElementById('f-name').value = 'Mule Sorc'; }
     if (s === 'group') { groupDialog(null); picked = ['a1', 'a2', 'a3']; drawPicks(); document.getElementById('f-gname').value = 'Farm team'; }
     if (s === 'settings') settingsDialog();
     if (s === 'multi') document.querySelector('[data-act=launch]').click();

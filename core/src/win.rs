@@ -64,6 +64,9 @@ extern "system" {
 #[link(name = "advapi32")]
 extern "system" {
     fn RegGetValueW(hkey: isize, sub: *const u16, value: *const u16, flags: u32, ty: *mut u32, data: *mut u8, len: *mut u32) -> i32;
+    fn RegCreateKeyExW(key: isize, sub: *const u16, reserved: u32, class: *const u16, options: u32, sam: u32, sa: *const c_void, out: *mut isize, disposition: *mut u32) -> i32;
+    fn RegSetValueExW(key: isize, name: *const u16, reserved: u32, ty: u32, data: *const u8, len: u32) -> i32;
+    fn RegCloseKey(key: isize) -> i32;
 }
 #[link(name = "bcrypt")]
 extern "system" { fn BCryptGenRandom(alg: H, buf: *mut u8, len: u32, flags: u32) -> i32; }
@@ -167,13 +170,15 @@ pub fn windows_version() -> String {
 // ------------------------------------------------------------------------------------------------ passwords
 const ENTROPY: &[u8] = b"d2r launcher accounts v1";
 
-fn dpapi(data: &[u8], lock: bool) -> Option<Vec<u8>> {
+fn dpapi(data: &[u8], lock: bool) -> Option<Vec<u8>> { dpapi_with(data, lock, ENTROPY) }
+
+fn dpapi_with(data: &[u8], lock: bool, entropy: &[u8]) -> Option<Vec<u8>> {
     unsafe {
         let input = DataBlob { len: data.len() as u32, data: data.as_ptr() as *mut u8 };
-        let entropy = DataBlob { len: ENTROPY.len() as u32, data: ENTROPY.as_ptr() as *mut u8 };
+        let entropy = DataBlob { len: entropy.len() as u32, data: entropy.as_ptr() as *mut u8 };
         let mut out = DataBlob { len: 0, data: std::ptr::null_mut() };
         let ok = if lock {
-            CryptProtectData(&input, wide("account").as_ptr(), &entropy, std::ptr::null_mut(), std::ptr::null_mut(), 1, &mut out)   // UI_FORBIDDEN
+            CryptProtectData(&input, std::ptr::null(), &entropy, std::ptr::null_mut(), std::ptr::null_mut(), 1, &mut out)   // UI_FORBIDDEN
         } else {
             CryptUnprotectData(&input, std::ptr::null_mut(), &entropy, std::ptr::null_mut(), std::ptr::null_mut(), 1, &mut out)
         };
@@ -188,6 +193,57 @@ fn dpapi(data: &[u8], lock: bool) -> Option<Vec<u8>> {
 pub fn protect(data: &[u8]) -> Option<Vec<u8>> { dpapi(data, true) }
 /// Unlocks a blob from `protect`; None for another user's or PC's blob, or a damaged one.
 pub fn unprotect(blob: &[u8]) -> Option<Vec<u8>> { dpapi(blob, false) }
+
+// ------------------------------------------------------------------------------------------------ Battle.net token sign-in
+// Accounts with the Battle.net Authenticator sign in with a token instead of a password (the method of
+// github.com/shupershuff/D2r-Multiboxing-Methods): D2R started with `-uid osi` reads it from the current user's registry,
+// DPAPI-locked with Blizzard's fixed entropy, and writes a fresh value back once the game reaches character select.
+const OSI_KEY: &str = "SOFTWARE\\Blizzard Entertainment\\Battle.net\\Launch Options\\OSI";
+const OSI_ENTROPY: [u8; 16] = [0xc8, 0x76, 0xf4, 0xae, 0x4c, 0x95, 0x2e, 0xfe, 0xf2, 0xfa, 0x0f, 0x54, 0x19, 0xc0, 0x9c, 0x43];
+
+/// Puts a sign-in token where D2R looks for it; returns the stored value, to see later when the game has taken it.
+pub fn set_osi_token(token: &str, region: &str) -> Result<Vec<u8>, String> {
+    let blob = dpapi_with(token.as_bytes(), true, &OSI_ENTROPY).ok_or("Windows could not lock the sign-in")?;
+    unsafe {
+        let mut key: isize = 0;
+        if RegCreateKeyExW(HKCU, wide(OSI_KEY).as_ptr(), 0, std::ptr::null(), 0, 0x20006, std::ptr::null(), &mut key, std::ptr::null_mut()) != 0 {   // KEY_WRITE
+            return Err("Windows could not open the Battle.net settings".into());
+        }
+        let region: Vec<u16> = wide(region);
+        let ok = RegSetValueExW(key, wide("REGION").as_ptr(), 0, 1, region.as_ptr() as *const u8, (region.len() * 2) as u32) == 0   // REG_SZ
+            && RegSetValueExW(key, wide("WEB_TOKEN").as_ptr(), 0, 3, blob.as_ptr(), blob.len() as u32) == 0;                       // REG_BINARY
+        RegCloseKey(key);
+        if !ok { return Err("Windows could not save the sign-in for the game".into()); }
+    }
+    Ok(blob)
+}
+
+/// The stored token value as it is now (D2R replaces it when it reaches character select).
+pub fn osi_token_value() -> Option<Vec<u8>> {
+    unsafe {
+        const RRF_RT_REG_BINARY: u32 = 0x8;
+        let (sub, val) = (wide(OSI_KEY), wide("WEB_TOKEN"));
+        let mut len: u32 = 0;
+        if RegGetValueW(HKCU, sub.as_ptr(), val.as_ptr(), RRF_RT_REG_BINARY, std::ptr::null_mut(), std::ptr::null_mut(), &mut len) != 0 { return None; }
+        let mut buf = vec![0u8; len as usize];
+        if RegGetValueW(HKCU, sub.as_ptr(), val.as_ptr(), RRF_RT_REG_BINARY, std::ptr::null_mut(), buf.as_mut_ptr(), &mut len) != 0 { return None; }
+        buf.truncate(len as usize);
+        Some(buf)
+    }
+}
+
+/// Reads the token D2R would see (for the tests: what `set_osi_token` stored unlocks to the token).
+pub fn osi_token_text() -> Option<String> {
+    osi_token_value().and_then(|b| dpapi_with(&b, false, &OSI_ENTROPY)).and_then(|t| String::from_utf8(t).ok())
+}
+
+/// The token in the address Battle.net's sign-in page sends the browser to: http://localhost:0/?ST=US-...&flowTrackingId=...
+pub fn token_from_redirect(url: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    let st = query.split('&').find_map(|kv| kv.strip_prefix("ST="))?;
+    let ok = st.len() >= 10 && st.len() <= 200 && st.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
+    if ok { Some(st.to_string()) } else { None }
+}
 
 // ------------------------------------------------------------------------------------------------ game folder
 const UNINSTALL: &str = "Microsoft\\Windows\\CurrentVersion\\Uninstall\\Diablo II Resurrected";
@@ -365,6 +421,16 @@ mod tests {
         assert_eq!(first_install(vec![root.join("nope")]), None);
         assert!(!fixed_drives().is_empty());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reads_the_token_from_the_sign_in_redirect() {
+        assert_eq!(token_from_redirect("http://localhost:0/?ST=US-d12ab21123abcdefabcdefabcdef1231-123123123&flowTrackingId=123a1234-1234"),
+            Some("US-d12ab21123abcdefabcdefabcdef1231-123123123".to_string()));
+        assert_eq!(token_from_redirect("http://localhost:0/?flowTrackingId=1&ST=EU-abcdef1234-99"), Some("EU-abcdef1234-99".to_string()));
+        assert_eq!(token_from_redirect("http://localhost:0/?flowTrackingId=1"), None);
+        assert_eq!(token_from_redirect("http://localhost:0/?ST=<script>"), None);
+        assert_eq!(token_from_redirect("https://us.battle.net/login/en/"), None);
     }
 
     #[test]

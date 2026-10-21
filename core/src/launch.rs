@@ -12,6 +12,13 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(90);
 pub const SETTLE: Duration = Duration::from_secs(5);
 /// Error code the window turns into the "Open N games at once?" question.
 pub const NEEDS_MULTI: &str = "needs_multi";
+/// A token account's game takes its sign-in when it reaches character select; the next game waits for that, this long
+/// at most.
+pub const TOKEN_WAIT: Duration = Duration::from_secs(90);
+
+/// How to start one game: the D2R arguments, and for an Authenticator account the sign-in token (and its region code)
+/// that has to be in place first.
+pub struct Start { pub args: Vec<String>, pub token: Option<(String, String)> }
 
 /// What the launcher needs from Windows (a fake one in the tests).
 pub trait Games {
@@ -20,7 +27,9 @@ pub trait Games {
     fn has_window(&mut self, pid: u32) -> bool;
     /// Closes D2R's one-copy lock in a running game.
     fn close_lock(&mut self, pid: u32) -> Result<usize, String>;
-    fn start(&mut self, args: Vec<String>) -> Result<(), String>;
+    fn start(&mut self, start: Start) -> Result<(), String>;
+    /// True once the game started last has taken the sign-in token it was given (or none was given).
+    fn token_taken(&mut self) -> bool;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -43,6 +52,7 @@ struct Step {
     retried: bool,
     pid: Option<u32>,
     until: Instant,
+    token: bool,          // an Authenticator account: settled only when the game took its sign-in
 }
 
 #[derive(Default)]
@@ -75,7 +85,7 @@ impl Launcher {
         crate::report::log(format!("{}: {} game{} ({} already open, several games {})", if group.is_some() { "Launch all" } else { "Play" },
             accounts.len(), if accounts.len() == 1 { "" } else { "s" }, running, if allow_multi { "on" } else { "off" }));
         self.steps = accounts.into_iter().map(|(account, name)| Step { account, name, state: State::Waiting, note: String::new(), since: now,
-            before: Vec::new(), retried: false, pid: None, until: now }).collect();
+            before: Vec::new(), retried: false, pid: None, until: now, token: false }).collect();
         Ok(())
     }
 
@@ -95,7 +105,7 @@ impl Launcher {
         for s in self.steps.iter_mut().filter(|s| s.state == State::Waiting) { s.state = State::Skipped; s.note = "Not opened".into(); }
     }
 
-    fn start_game(&mut self, i: usize, now: Instant, games: &mut dyn Games, args_for: &dyn Fn(&str) -> Result<Vec<String>, String>) {
+    fn start_game(&mut self, i: usize, now: Instant, games: &mut dyn Games, args_for: &dyn Fn(&str) -> Result<Start, String>) {
         let running = games.running();
         if running.len() >= MAX_GAMES { return self.fail(i, format!("{} games are open already", running.len())); }
         if !running.is_empty() {
@@ -106,8 +116,10 @@ impl Launcher {
             }
             crate::report::log(format!("game {}: closed {} lock(s) in {} running game(s)", i + 1, closed, running.len()));
         }
-        let started = args_for(&self.steps[i].account).and_then(|args| games.start(args));
+        let mut token = false;
+        let started = args_for(&self.steps[i].account).and_then(|st| { token = st.token.is_some(); games.start(st) });
         if let Err(e) = started { return self.fail(i, e); }
+        self.steps[i].token = token;
         let s = &mut self.steps[i];
         s.state = State::Starting;
         s.note = if s.retried { "Trying again…".into() } else { "Starting…".into() };
@@ -117,7 +129,7 @@ impl Launcher {
     }
 
     /// Moves the queue along; called a few times a second.
-    pub fn tick(&mut self, now: Instant, games: &mut dyn Games, args_for: &dyn Fn(&str) -> Result<Vec<String>, String>) {
+    pub fn tick(&mut self, now: Instant, games: &mut dyn Games, args_for: &dyn Fn(&str) -> Result<Start, String>) {
         let Some(i) = self.steps.iter().position(|s| s.state.active()) else { return };
         match self.steps[i].state {
             State::Waiting => self.start_game(i, now, games, args_for),
@@ -129,7 +141,7 @@ impl Launcher {
                     s.state = State::Settling;
                     s.pid = Some(pid);
                     s.until = now + SETTLE;
-                    s.note = "Window open, signing in…".into();
+                    s.note = if s.token { "Window open, waiting for character select…".into() } else { "Window open, signing in…".into() };
                     crate::report::log(format!("game {}: window after {:.1} s", i + 1, now.duration_since(s.since).as_secs_f32()));
                 } else if new.is_empty() {
                     // the game we started is gone already: usually the lock of a game that was still loading took it
@@ -145,7 +157,13 @@ impl Launcher {
             State::Settling => {
                 let pid = self.steps[i].pid.unwrap_or(0);
                 if !games.running().contains(&pid) { return self.fail(i, "The game closed while it was loading".into()); }
-                if now >= self.steps[i].until {
+                let s = &self.steps[i];
+                let taken = !s.token || games.token_taken();
+                let gave_up = s.token && now >= s.until + TOKEN_WAIT;
+                if s.token && now >= s.until && (taken || gave_up) {
+                    crate::report::log(format!("game {}: {}", i + 1, if taken { "took its sign-in (character select)" } else { "did not take its sign-in in time, going on" }));
+                }
+                if now >= self.steps[i].until && (taken || gave_up) {
                     self.steps[i].state = State::Done;
                     self.steps[i].note = "Open".into();
                     crate::report::log(format!("game {}: open", i + 1));
@@ -178,9 +196,15 @@ pub mod tests {
         pub window_after: u32,
         pub lock_late: bool,                // the first game takes its lock only after a second game was started once
         pub next: u32,
+        pub token_after: u32,               // ticks until a started game takes its sign-in token
+        pub tokens: Vec<String>,            // tokens handed over, in order
+        pub token_left: Option<u32>,
     }
     impl FakeGames {
-        pub fn advance(&mut self) { for p in self.procs.iter_mut() { p.1 = p.1.saturating_sub(1); } }
+        pub fn advance(&mut self) {
+            for p in self.procs.iter_mut() { p.1 = p.1.saturating_sub(1); }
+            if let Some(t) = self.token_left.as_mut() { *t = t.saturating_sub(1); }
+        }
     }
     impl Games for FakeGames {
         fn running(&mut self) -> Vec<u32> { self.procs.iter().map(|p| p.0).collect() }
@@ -191,8 +215,10 @@ pub mod tests {
             let p = self.procs.iter_mut().find(|p| p.0 == pid).ok_or("no such game")?;
             let had = p.2 as usize; p.2 = false; Ok(had)
         }
-        fn start(&mut self, args: Vec<String>) -> Result<(), String> {
-            self.started.push(args[1].clone());
+        fn token_taken(&mut self) -> bool { self.token_left.map_or(true, |t| t == 0) }
+        fn start(&mut self, st: Start) -> Result<(), String> {
+            let args = st.args;
+            self.started.push(if let Some((t, _)) = st.token { self.tokens.push(t.clone()); self.token_left = Some(self.token_after); t } else { args[1].clone() });
             assert_eq!(args.last().unwrap(), "-skiplogovideo");
             if self.procs.iter().any(|p| p.2) { self.next += 1; return Ok(()); }   // refused: the process comes and goes before we look
             self.next += 1;
@@ -201,7 +227,10 @@ pub mod tests {
         }
     }
 
-    fn args(id: &str) -> Result<Vec<String>, String> { crate::store::launch_args(&format!("{}@example.com", id), "pw", "Americas") }
+    fn args(id: &str) -> Result<Start, String> {
+        if let Some(t) = id.strip_prefix("tok:") { return Ok(Start { args: vec!["-uid".into(), "osi".into(), "-skiplogovideo".into()], token: Some((t.to_string(), "NA".into())) }); }
+        Ok(Start { args: crate::store::launch_args(&format!("{}@example.com", id), "pw", "Americas")?, token: None })
+    }
     fn run(l: &mut Launcher, g: &mut FakeGames, t: &mut Instant, ticks: usize) {
         for _ in 0..ticks { l.tick(*t, g, &args); g.advance(); *t += Duration::from_millis(500); }
     }
@@ -268,6 +297,26 @@ pub mod tests {
         l.begin(t, None, None, accts(&["a"]), false, 0).unwrap();
         l.tick(t, &mut g, &|_| Err("The saved password is damaged".into()));
         assert!(g.started.is_empty() && !l.busy());
+    }
+
+    #[test]
+    fn a_token_account_holds_the_next_game_until_it_took_its_sign_in() {
+        let mut t = Instant::now();
+        let mut g = FakeGames { window_after: 2, token_after: 40, ..Default::default() };   // character select 20 s after start
+        let mut l = Launcher::default();
+        l.begin(t, Some("G".into()), Some("g".into()), accts(&["tok:US-aaaa1111-1", "b"]), true, 0).unwrap();
+        run(&mut l, &mut g, &mut t, 20);   // 10 s: window up, settle time over, token not taken yet
+        assert_eq!(g.started, vec!["US-aaaa1111-1"]);
+        assert_eq!(l.view()["steps"][0]["note"], "Window open, waiting for character select…");
+        run(&mut l, &mut g, &mut t, 40);
+        assert_eq!(g.started, vec!["US-aaaa1111-1", "b@example.com"]);
+        // a token never taken: the next game goes after TOKEN_WAIT anyway
+        let mut t = Instant::now();
+        let mut g = FakeGames { window_after: 1, token_after: 1_000_000, ..Default::default() };
+        let mut l = Launcher::default();
+        l.begin(t, None, None, accts(&["tok:US-bbbb2222-2", "c"]), true, 0).unwrap();
+        run(&mut l, &mut g, &mut t, ((SETTLE + TOKEN_WAIT).as_millis() / 500) as usize + 10);
+        assert_eq!(g.started.len(), 2);
     }
 
     #[test]

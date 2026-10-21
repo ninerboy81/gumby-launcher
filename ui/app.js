@@ -1,5 +1,6 @@
 // The launcher window. Everything comes from the core through one command: call(op, p).
 const invoke = (op, p = {}) => (window.__TAURI__ ? window.__TAURI__.core.invoke('call', { op, p }) : window.previewInvoke(op, p));
+const openSignin = (region) => (window.__TAURI__ ? window.__TAURI__.core.invoke('signin', { region }) : window.previewInvoke('signin', { region }));
 
 const ICON = {
   play: '<svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 1.5v11l9.5-5.5z" fill="currentColor"/></svg>',
@@ -91,7 +92,7 @@ function drawAccounts() {
     const right = step ? `<span class="runtag" style="color:var(--blue-glow)"><span class="spin"></span>${esc(step.note || 'Starting…')}</span>`
       : o ? `<span class="runtag"><span class="dot on"></span>Running${o.quarter != null && S.running > 1 ? `<span class="q">${QUARTER[o.quarter]}</span>` : ''}</span>` : '<span></span>';
     return `<div class="acct"><button class="play ${L.busy ? 'off' : ''}" data-act="play" data-id="${a.id}" title="Open ${esc(a.name)}" aria-label="Open ${esc(a.name)}">${ICON.play}</button>
-      <div><div class="who">${esc(a.name)}</div><div class="mail">${esc(a.email)}</div></div>
+      <div><div class="who">${esc(a.name)}</div><div class="mail">${a.method === 'token' ? 'Battle.net Authenticator' : esc(a.email)}</div></div>
       ${right}<span class="badge">${esc(a.tag)}</span>
       <button class="iconbtn" data-act="editacct" data-id="${a.id}" title="Edit account" aria-label="Edit ${esc(a.name)}">${ICON.pen}</button></div>`;
   }).join('');
@@ -171,20 +172,52 @@ function openDialog(kind, html, width = 460) {
 }
 function closeDialog() { dialog = null; $('modal').innerHTML = ''; }
 
+let acctForm = null;   // the open account dialog: {id, method, signin: idle|waiting|done, signedIn}
 function accountDialog(id) {
   const a = id ? acct(id) : null;
+  acctForm = { id: a?.id ?? '', method: a?.method ?? 'password', signin: 'idle', had: a?.method === 'token' };
   const region = a ? a.region : 'Americas';
+  invoke('signin_reset').catch(() => {});
   openDialog('account', `<h3 class="title">${a ? 'Edit account' : 'Add account'}</h3>
     <p class="lead">Your Battle.net login. ${esc(S.app)} signs you in, so you never see the Battle.net app.</p>
     <label class="f" for="f-name">Name (shown on the button)</label><div class="input"><input id="f-name" maxlength="24" value="${esc(a?.name)}" placeholder="Main"></div>
-    <label class="f" for="f-email">Battle.net email</label><div class="input"><input id="f-email" maxlength="120" value="${esc(a?.email)}" placeholder="you@example.com" spellcheck="false"></div>
-    <label class="f" for="f-pw">Password</label><div class="input"><input id="f-pw" type="password" maxlength="128" placeholder="${a ? 'Leave empty to keep the saved one' : ''}"><button class="eye" data-act="peek" type="button">Show</button></div>
     <label class="f">Region</label><div class="seg" id="f-region">${S.regions.map((r) => `<span data-act="region" data-r="${r}" class="${r === region ? 'on' : ''}">${r}</span>`).join('')}</div>
-    <div class="note"><span>🔒</span><span>The password is locked with Windows encryption for your Windows user. ${esc(S.app)} never shows it again, never logs it, never sends it anywhere.</span></div>
+    <label class="f">How does this account sign in?</label>
+    <div class="seg" id="f-method" style="grid-template-columns:1fr 1fr"><span data-act="method" data-m="password">Email + password</span><span data-act="method" data-m="token">Battle.net Authenticator</span></div>
+    <div id="f-pwbox">
+      <label class="f" for="f-email">Battle.net email</label><div class="input"><input id="f-email" maxlength="120" value="${esc(a?.email)}" placeholder="you@example.com" spellcheck="false"></div>
+      <label class="f" for="f-pw">Password</label><div class="input"><input id="f-pw" type="password" maxlength="128" placeholder="${a && a.method !== 'token' ? 'Leave empty to keep the saved one' : ''}"><button class="eye" data-act="peek" type="button">Show</button></div>
+      <div class="note"><span>🔒</span><span>The password is locked with Windows encryption for your Windows user. ${esc(S.app)} never shows it again, never logs it, never sends it anywhere.</span></div>
+    </div>
+    <div id="f-tokbox"></div>
     <div class="err" id="f-err"></div>
     <div class="foot">${a ? `<button class="btn ghost danger left" data-act="delacct" data-id="${a.id}">Delete</button>` : ''}
-      <button class="btn ghost" data-act="close">Cancel</button><button class="btn primary" data-act="saveacct" data-id="${a?.id ?? ''}">Save account</button></div>`);
+      <button class="btn ghost" data-act="close">Cancel</button><button class="btn primary" id="f-save" data-act="saveacct" data-id="${a?.id ?? ''}">Save account</button></div>`, 500);
+  drawMethod();
 }
+
+// the sign-in part of the account dialog, redrawn as the method or the Battle.net sign-in changes
+function drawMethod() {
+  const f = acctForm;
+  document.querySelectorAll('#f-method span').forEach((s) => s.classList.toggle('on', s.dataset.m === f.method));
+  $('f-pwbox').style.display = f.method === 'password' ? '' : 'none';
+  const signedIn = f.signin === 'done' || (f.had && f.signin === 'idle');
+  $('f-tokbox').innerHTML = f.method !== 'token' ? '' : signedIn
+    ? `<div class="note" style="background:rgba(63,214,166,.08);border-color:rgba(63,214,166,.35);color:#cdeee3"><span>✓</span><span><b>Signed in.</b> This account opens without a password. If you turn the Authenticator off and on again, sign in once more.</span></div>
+       <div style="display:flex;justify-content:center;margin-top:12px"><button class="btn" data-act="signin">Sign in again</button></div>`
+    : `<div class="note"><span>🛡</span><span>For accounts with the Authenticator (2-step). Sign in once on Battle.net's own page, code included. ${esc(S.app)} keeps the sign-in it gets back, locked with Windows encryption, and never sees your password.</span></div>
+       <div style="display:flex;justify-content:center;margin-top:16px"><button class="btn primary big" data-act="signin" ${f.signin === 'waiting' ? 'disabled' : ''}>${f.signin === 'waiting' ? 'Waiting for Battle.net…' : 'Sign in with Battle.net'}</button></div>`;
+  $('f-save').disabled = f.method === 'token' && !signedIn;
+}
+
+// while the Battle.net window is open, follow it
+setInterval(async () => {
+  if (dialog !== 'account' || !acctForm || acctForm.signin !== 'waiting') return;
+  try {
+    const st = (await invoke('signin_status')).state;
+    if (st === 'done' || st === 'idle') { acctForm.signin = st; if (st === 'done') acctForm.had = true; drawMethod(); }
+  } catch (e) { /* next round */ }
+}, 600);
 
 let picked = [];
 function groupDialog(id) {
@@ -297,10 +330,16 @@ document.addEventListener('click', async (ev) => {
       if (i >= 0) picked.splice(i, 1); else if (picked.length < S.max_group) picked.push(id); else { formError(`A group opens up to ${S.max_group} games`); break; }
       formError(''); drawPicks(); break;
     }
+    case 'method': acctForm.method = el.dataset.m; formError(''); drawMethod(); break;
+    case 'signin': {
+      const region = document.querySelector('#f-region span.on')?.dataset.r;
+      try { await openSignin(region); acctForm.signin = 'waiting'; acctForm.had = false; drawMethod(); } catch (e) { formError(e); }
+      break;
+    }
     case 'saveacct': {
       const region = document.querySelector('#f-region span.on')?.dataset.r;
       try {
-        await invoke('account_save', { id: id || '', name: $('f-name').value, email: $('f-email').value, password: $('f-pw').value, region });
+        await invoke('account_save', { id: id || '', name: $('f-name').value, email: $('f-email').value, password: $('f-pw').value, region, method: acctForm.method });
         $('f-pw').value = '';
         closeDialog(); toast('Account saved', true); refresh();
       } catch (e) { formError(e); }

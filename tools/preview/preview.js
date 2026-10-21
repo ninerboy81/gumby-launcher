@@ -3,7 +3,7 @@
   const s = new URLSearchParams(location.search).get('s') || 'home';
   const accounts = s === 'empty' ? [] : [
     { id: 'a1', name: 'Main Barb', email: 'barb@example.com', region: 'Americas', tag: 'US' },
-    { id: 'a2', name: 'Mule Sorc', email: 'sorc@example.com', region: 'Americas', tag: 'US' },
+    { id: 'a2', name: 'Mule Sorc', email: '', region: 'Americas', tag: 'US', method: 'token' },
     { id: 'a3', name: 'Pally Alt', email: 'pally@example.com', region: 'Americas', tag: 'US' },
   ];
   const groups = s === 'empty' ? [] : [
@@ -34,6 +34,7 @@
       '21:14:15  game 2: gone right after starting, trying once more\n21:14:15  game 2 started (second try)\n21:14:15  game 2 FAILED: D2R closed right after starting\n' } : null;
   window.previewInvoke = async (op, p) => {
     if (op === 'state') return state;
+    if (op === 'signin_status') return { state: s === 'signedin' ? 'done' : 'waiting' };
     if (op === 'launch_group' && !p.multi) throw 'needs_multi:3';
     return true;
   };

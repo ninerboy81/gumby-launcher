@@ -1,6 +1,7 @@
-//! Saved accounts, groups and the one setting, in %APPDATA%\<app>\accounts.json. Passwords are locked with Windows
-//! DPAPI for the Windows user before they are written; the file never holds a password in the clear, and `view()`
-//! (what the window shows) never holds one at all.
+//! Saved accounts, groups and the one setting, in %APPDATA%\<app>\accounts.json. An account signs in with its email
+//! and password, or - with the Battle.net Authenticator - with a sign-in token from Battle.net's own login page. Either
+//! secret is locked with Windows DPAPI for the Windows user before it is written; the file never holds one in the
+//! clear, and `view()` (what the window shows) never holds one at all.
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -14,8 +15,21 @@ pub const REGIONS: [(&str, &str, &str); 3] = [
     ("Asia", "KR", "kr.actual.battle.net"),
 ];
 
+/// Battle.net's sign-in page for a token account of this region.
+pub fn signin_url(region: &str) -> Option<String> {
+    let host = match region { "Americas" => "us", "Europe" => "eu", "Asia" => "kr", _ => return None };
+    Some(format!("https://{}.battle.net/login/en/?externalChallenge=login&app=OSI", host))
+}
+/// The REGION value D2R reads with a token.
+fn osi_region(region: &str) -> &'static str { match region { "Europe" => "EU", "Asia" => "KR", _ => "NA" } }
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Account { pub id: String, pub name: String, pub email: String, pub region: String, secret: String }
+pub struct Account {
+    pub id: String, pub name: String, pub email: String, pub region: String, secret: String,
+    /// "password" or "token" (Battle.net Authenticator)
+    #[serde(default = "password_method")] pub method: String,
+}
+fn password_method() -> String { "password".into() }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Group { pub id: String, pub name: String, pub accounts: Vec<String> }
@@ -32,7 +46,12 @@ struct File {
 
 /// What the add/edit account dialog sends. An empty password on an edit keeps the saved one.
 #[derive(Deserialize, Default)]
-pub struct AccountInput { #[serde(default)] pub id: String, pub name: String, pub email: String, #[serde(default)] pub password: String, pub region: String }
+pub struct AccountInput {
+    #[serde(default)] pub id: String, pub name: String, #[serde(default)] pub email: String, #[serde(default)] pub password: String,
+    pub region: String, #[serde(default)] pub method: String,
+    /// The sign-in token caught from Battle.net's page (filled in by the engine, never sent by the window).
+    #[serde(skip)] pub token: Option<String>,
+}
 
 #[derive(Deserialize, Default)]
 pub struct GroupInput { #[serde(default)] pub id: String, pub name: String, pub accounts: Vec<String> }
@@ -42,7 +61,7 @@ pub struct Store { path: PathBuf, data: File }
 pub fn region_host(region: &str) -> Option<&'static str> { REGIONS.iter().find(|r| r.0 == region).map(|r| r.2) }
 fn region_tag(region: &str) -> &'static str { REGIONS.iter().find(|r| r.0 == region).map_or("?", |r| r.1) }
 
-/// The D2R.exe arguments for a login: signed in by itself, intro videos always skipped.
+/// The D2R.exe arguments for an email + password login: signed in by itself, intro videos always skipped.
 pub fn launch_args(email: &str, password: &str, region: &str) -> Result<Vec<String>, String> {
     let host = region_host(region).ok_or("Pick a region")?;
     Ok(vec!["-username".into(), email.into(), "-password".into(), password.into(), "-address".into(), host.into(), "-skiplogovideo".into()])
@@ -90,21 +109,29 @@ impl Store {
 
     pub fn save_account(&mut self, a: AccountInput) -> Result<String, String> {
         let name = clean_name(&a.name, "account")?;
+        let token_method = a.method == "token";
         let email = a.email.trim().to_string();
-        if !email.contains('@') || email.len() > 120 || email.contains(char::is_whitespace) { return Err("Enter the Battle.net email address".into()); }
+        if !token_method && (!email.contains('@') || email.len() > 120 || email.contains(char::is_whitespace)) { return Err("Enter the Battle.net email address".into()); }
         if region_host(&a.region).is_none() { return Err("Pick a region".into()); }
         if a.password.chars().count() > 128 { return Err("That password is too long".into()); }
         let existing = self.data.accounts.iter().position(|x| !a.id.is_empty() && x.id == a.id);
         if !a.id.is_empty() && existing.is_none() { return Err("That account is not saved any more".into()); }
         if existing.is_none() && self.data.accounts.len() >= MAX_ACCOUNTS { return Err(format!("You can save up to {} accounts", MAX_ACCOUNTS)); }
-        let secret = if a.password.is_empty() {
-            match existing { Some(i) => self.data.accounts[i].secret.clone(), None => return Err("Enter the password".into()) }
+        let method = if token_method { "token" } else { "password" };
+        let same_method = existing.map_or(false, |i| self.data.accounts[i].method == method);
+        let fresh = if token_method { a.token.clone().unwrap_or_default() } else { a.password.clone() };
+        let secret = if fresh.is_empty() {
+            match existing {
+                Some(i) if same_method => self.data.accounts[i].secret.clone(),
+                _ => return Err(if token_method { "Sign in with Battle.net first".into() } else { "Enter the password".into() }),
+            }
         } else {
-            let blob = crate::win::protect(a.password.as_bytes()).ok_or("Windows could not lock the password")?;
+            let blob = crate::win::protect(fresh.as_bytes()).ok_or("Windows could not lock the sign-in")?;
             crate::b64::encode(&blob)
         };
         let id = match existing { Some(i) => self.data.accounts[i].id.clone(), None => new_id('a', &|c| self.data.accounts.iter().any(|x| x.id == c)) };
-        let acct = Account { id: id.clone(), name, email, region: a.region, secret };
+        let email = if token_method && !email.contains('@') { String::new() } else { email };
+        let acct = Account { id: id.clone(), name, email, region: a.region, secret, method: method.into() };
         match existing { Some(i) => self.data.accounts[i] = acct, None => self.data.accounts.push(acct) }
         self.save()?;
         Ok(id)
@@ -162,16 +189,20 @@ impl Store {
         String::from_utf8(plain).map_err(|_| "The saved password is damaged: edit the account and enter it again".to_string())
     }
 
-    /// The D2R arguments for an account (holds the password: use it at once and drop it).
-    pub fn args_for(&self, id: &str) -> Result<Vec<String>, String> {
+    /// How to start an account's game (holds its password or token: use it at once and drop it).
+    pub fn args_for(&self, id: &str) -> Result<crate::launch::Start, String> {
         let a = self.account(id).ok_or("That account is not saved")?;
-        launch_args(&a.email, &self.password(id)?, &a.region)
+        if a.method == "token" {
+            return Ok(crate::launch::Start { args: vec!["-uid".into(), "osi".into(), "-skiplogovideo".into()],
+                token: Some((self.password(id)?, osi_region(&a.region).into())) });
+        }
+        Ok(crate::launch::Start { args: launch_args(&a.email, &self.password(id)?, &a.region)?, token: None })
     }
 
     /// What the window shows: never a password, never the locked blob.
     pub fn view(&self) -> Value {
         let accounts: Vec<Value> = self.data.accounts.iter().map(|a| json!({"id": a.id, "name": a.name, "email": a.email,
-            "region": a.region, "tag": region_tag(&a.region)})).collect();
+            "region": a.region, "tag": region_tag(&a.region), "method": a.method})).collect();
         let groups: Vec<Value> = self.data.groups.iter().map(|g| json!({"id": g.id, "name": g.name, "accounts": g.accounts})).collect();
         json!({"accounts": accounts, "groups": groups, "allow_multi": self.data.allow_multi, "max_accounts": MAX_ACCOUNTS, "max_group": MAX_GROUP,
             "regions": REGIONS.iter().map(|r| r.0).collect::<Vec<_>>()})
@@ -189,7 +220,7 @@ mod tests {
         (dir, s)
     }
     fn acct(name: &str, email: &str, pw: &str) -> AccountInput {
-        AccountInput { id: String::new(), name: name.into(), email: email.into(), password: pw.into(), region: "Americas".into() }
+        AccountInput { id: String::new(), name: name.into(), email: email.into(), password: pw.into(), region: "Americas".into(), method: String::new(), token: None }
     }
 
     #[test]
@@ -210,16 +241,40 @@ mod tests {
         let shown = s.view().to_string();
         assert!(!shown.contains("S3cret") && !shown.contains("secret"));
         assert_eq!(s.password(&id).unwrap(), "S3cret-Passw0rd!");
-        assert_eq!(s.args_for(&id).unwrap()[3], "S3cret-Passw0rd!");
+        assert_eq!(s.args_for(&id).unwrap().args[3], "S3cret-Passw0rd!");
         // reloads from disk the same
         let back = Store::load(&dir);
         assert_eq!(back.password(&id).unwrap(), "S3cret-Passw0rd!");
         assert_eq!(back.view()["accounts"][0]["tag"], "US");
         // an edit with an empty password keeps the saved one
-        s.save_account(AccountInput { id: id.clone(), name: "Main".into(), email: "me2@example.com".into(), password: String::new(), region: "Europe".into() }).unwrap();
+        s.save_account(AccountInput { id: id.clone(), name: "Main".into(), email: "me2@example.com".into(), password: String::new(), region: "Europe".into(), method: String::new(), token: None }).unwrap();
         assert_eq!(s.password(&id).unwrap(), "S3cret-Passw0rd!");
         assert_eq!(s.account(&id).unwrap().email, "me2@example.com");
         assert_eq!(s.accounts().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_token_account_starts_with_its_token_and_never_shows_it() {
+        let (dir, mut s) = temp_store("token");
+        let tok = |t: &str| AccountInput { name: "Mule Sorc".into(), region: "Europe".into(), method: "token".into(), token: Some(t.into()), ..Default::default() };
+        assert!(s.save_account(AccountInput { token: None, ..tok("") }).is_err());   // sign in first
+        let id = s.save_account(tok("EU-abcdef0123456789-42")).unwrap();
+        let raw = std::fs::read_to_string(dir.join("accounts.json")).unwrap();
+        assert!(!raw.contains("EU-abcdef0123456789-42"));
+        assert!(!s.view().to_string().contains("abcdef0123456789"));
+        assert_eq!(s.view()["accounts"][0]["method"], "token");
+        let st = s.args_for(&id).unwrap();
+        assert_eq!(st.args, vec!["-uid", "osi", "-skiplogovideo"]);
+        assert_eq!(st.token, Some(("EU-abcdef0123456789-42".to_string(), "EU".to_string())));
+        // editing without signing in again keeps the token; switching to a password needs the password
+        s.save_account(AccountInput { id: id.clone(), ..tok("") }).unwrap();
+        assert_eq!(s.password(&id).unwrap(), "EU-abcdef0123456789-42");
+        assert!(s.save_account(AccountInput { id: id.clone(), name: "Mule Sorc".into(), email: "m@example.com".into(), region: "Europe".into(), ..Default::default() }).is_err());
+        assert_eq!(signin_url("Asia").unwrap(), "https://kr.battle.net/login/en/?externalChallenge=login&app=OSI");
+        // accounts saved before tokens existed load as password accounts
+        std::fs::write(dir.join("accounts.json"), r#"{"accounts":[{"id":"a1","name":"Old","email":"o@example.com","region":"Americas","secret":"AAAA"}]}"#).unwrap();
+        assert_eq!(Store::load(&dir).accounts()[0].method, "password");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

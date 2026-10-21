@@ -2,7 +2,8 @@
 // the core a few times a second (the launch queue and the screen quarters), one does the slow network work (terror
 // zones, update checks, sending a report) and hands the results to the core. "Restart to update" is handled here.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-use launcher_core::{data_dir, report, tile::WinScreen, update, zones, Engine, WinGames, VERSION};
+use launcher_core::{data_dir, report, store, tile::WinScreen, update, win, zones, Engine, WinGames, VERSION};
+use tauri::{Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -23,8 +24,38 @@ fn call(app: tauri::AppHandle, state: tauri::State<'_, App>, op: String, p: Valu
         app.exit(0);
         return Ok(Value::Bool(true));
     }
-    let mut games = WinGames { folder: engine.game_folder() };
-    engine.call(Instant::now(), &op, &p, &mut games)
+    let mut games = WinGames { folder: engine.game_folder(), token_written: engine.token_written.clone() };
+    let r = engine.call(Instant::now(), &op, &p, &mut games);
+    engine.token_written = games.token_written;
+    r
+}
+
+/// "Sign in with Battle.net" for an Authenticator account: Battle.net's own login page in a small private window (no
+/// cookies kept, so each account signs in fresh). When the page sends the browser on to http://localhost:0/?ST=...,
+/// the token is taken from that address, the window closes and the core keeps the token until the account is saved.
+#[tauri::command]
+async fn signin(app: tauri::AppHandle, state: tauri::State<'_, App>, region: String) -> Result<(), String> {
+    let url = store::signin_url(&region).ok_or("Pick a region")?;
+    if let Some(w) = app.get_webview_window("bnet") { let _ = w.set_focus(); return Ok(()); }
+    state.0.lock().map_err(|_| "busy")?.signin_opened();
+    let (engine, handle) = (state.0.clone(), app.clone());
+    let window = WebviewWindowBuilder::new(&app, "bnet", WebviewUrl::External(url.parse().map_err(|_| "bad sign-in address")?))
+        .title("Sign in with Battle.net")
+        .inner_size(520.0, 760.0)
+        .center()
+        .incognito(true)
+        .on_navigation(move |u| {
+            if u.host_str() != Some("localhost") { return true; }
+            if let Some(token) = win::token_from_redirect(u.as_str()) { if let Ok(mut e) = engine.lock() { e.signin_token(token); } }
+            let h = handle.clone();
+            std::thread::spawn(move || if let Some(w) = h.get_webview_window("bnet") { let _ = w.close(); });
+            false
+        })
+        .build()
+        .map_err(|e| format!("The sign-in window did not open ({})", e))?;
+    let engine = state.0.clone();
+    window.on_window_event(move |ev| if let WindowEvent::Destroyed = ev { if let Ok(mut e) = engine.lock() { e.signin_closed(); } });
+    Ok(())
 }
 
 fn network(engine: Arc<Mutex<Engine>>) {
@@ -64,15 +95,16 @@ fn main() {
     std::thread::spawn(move || loop {
         std::thread::sleep(Duration::from_millis(400));
         if let Ok(mut e) = ticker.lock() {
-            let mut games = WinGames { folder: e.game_folder() };
+            let mut games = WinGames { folder: e.game_folder(), token_written: e.token_written.take() };
             e.tick(Instant::now(), &mut games, &mut WinScreen);
+            e.token_written = games.token_written;
         }
     });
     let net = engine.clone();
     std::thread::spawn(move || network(net));
     let app = tauri::Builder::default()
         .manage(App(engine))
-        .invoke_handler(tauri::generate_handler![call])
+        .invoke_handler(tauri::generate_handler![call, signin])
         .run(tauri::generate_context!());
     if app.is_err() { std::process::exit(77); }
 }
