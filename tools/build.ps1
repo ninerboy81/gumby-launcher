@@ -32,6 +32,7 @@ try {
 } finally { Pop-Location }
 Copy-Item "$build\src\Cargo.lock" "$repo\Cargo.lock" -Force
 New-Item -ItemType Directory -Force "$repo\dist" | Out-Null
-Copy-Item "$build\target\release\gumby-launcher.exe" "$repo\dist\GumbyLauncher.exe" -Force
+try { Copy-Item "$build\target\release\gumby-launcher.exe" "$repo\dist\GumbyLauncher.exe" -Force -ErrorAction Stop }
+catch { Write-Warning "dist\GumbyLauncher.exe is in use (the launcher is open); the new build is in $build\target\release" }
 $mb = [math]::Round((Get-Item "$repo\dist\GumbyLauncher.exe").Length / 1MB, 1)
 "built dist\GumbyLauncher.exe ($mb MB)"

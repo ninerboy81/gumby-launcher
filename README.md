@@ -8,6 +8,7 @@ A small launcher for Diablo II: Resurrected. Save your Battle.net accounts once,
 - **Launch all** opens a group one after another and puts each game in its own quarter of the screen.
 - **Terror zones** now and next, with a countdown.
 - **Updates** download by themselves; you choose when to restart.
+- **Steam logins:** coming soon.
 
 ![Launch all](docs/launching.png)
 

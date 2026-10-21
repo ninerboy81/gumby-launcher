@@ -34,7 +34,7 @@ Set-Version "$repo\app\Cargo.toml" '^version = "[^"]*"' "version = `"$Version`""
 Set-Version "$repo\app\tauri.conf.json" '"version": "[^"]*"' "`"version`": `"$Version`""
 
 & "$PSScriptRoot\build.ps1" -Test
-$exe = "$repo\dist\GumbyLauncher.exe"
+$exe = 'C:\Users\Public\gumby-build\target\release\gumby-launcher.exe'   # straight from the build: dist may be in use
 $out = "$repo\dist\release-$Version"
 New-Item -ItemType Directory -Force $out | Out-Null
 Copy-Item $exe "$out\GumbyLauncher.exe" -Force
@@ -47,6 +47,7 @@ if ($LASTEXITCODE -ne 0) { throw 'signing failed' }
 "signed $Version ($([math]::Round($size / 1MB, 1)) MB, sha256 $hash)"
 if ($DryRun) { "dry run: nothing uploaded ($out)"; return }
 
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12   # Windows PowerShell 5.1 needs it for GitHub
 $tokenFile = "$secrets\github-token.txt"
 if (-not (Test-Path $tokenFile)) { throw "No GitHub token at $tokenFile" }
 $headers = @{ Authorization = "Bearer $((Get-Content $tokenFile -Raw).Trim())"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'GumbyLauncher-publish' }
